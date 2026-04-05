@@ -1,0 +1,21 @@
+# Node
+node_modules/
+dist/
+
+# Rust / Tauri
+src-tauri/target/
+
+# Python
+python/__pycache__/
+python/*.pyc
+python/*.pyo
+python/dist/
+python/build/
+python/*.spec
+
+# Environment / secrets
+.env
+.env.*
+
+# OS
+.DS_Store
