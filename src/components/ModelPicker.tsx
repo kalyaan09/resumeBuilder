@@ -36,9 +36,9 @@ const PROVIDERS: Array<{
         label: "Model",
         placeholder: "gemini-2.5-flash",
         options: [
-          { value: "gemini-3.1-flash-lite-preview", label: "gemini-3.1-flash-lite-preview", note: "Newest & Fastest · ~15 RPM / 1,000 RPD" },
           { value: "gemini-2.5-flash", label: "gemini-2.5-flash", note: "Best reasoning · ~10 RPM / 250 RPD" },
-          { value: "gemini-1.5-flash", label: "gemini-1.5-flash", note: "Max quota · ~15 RPM / 1,500 RPD" },
+          { value: "gemini-2.5-flash-lite-preview-06-17", label: "gemini-2.5-flash-lite-preview-06-17", note: "Fastest & cheapest · ~30 RPM / 1,500 RPD" },
+          { value: "gemini-1.5-flash", label: "gemini-1.5-flash", note: "Max free quota · ~15 RPM / 1,500 RPD" },
         ],
       },
     ],
@@ -93,10 +93,15 @@ interface ModelConfig {
 
 interface ModelPickerProps {
   value: ModelConfig | null;
+  /** The API key for the currently selected provider, kept outside modelConfig */
+  apiKey: string;
   onChange: (config: ModelConfig) => void;
+  onApiKeyChange: (key: string) => void;
+  /** Called when a test connection succeeds — use to mark the model as verified */
+  onTestSuccess?: () => void;
 }
 
-export default function ModelPicker({ value, onChange }: ModelPickerProps) {
+export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, onTestSuccess }: ModelPickerProps) {
   const [testStatus, setTestStatus] = useState<Record<string, "idle" | "loading" | "ok" | "error">>({});
   const [testMessages, setTestMessages] = useState<Record<string, string>>({});
 
@@ -108,7 +113,11 @@ export default function ModelPicker({ value, onChange }: ModelPickerProps) {
   }
 
   function handleFieldChange(key: string, val: string) {
-    onChange({ ...value!, [key]: val });
+    if (key === "api_key") {
+      onApiKeyChange(val);
+    } else {
+      onChange({ ...value!, [key]: val });
+    }
   }
 
   async function handleTest() {
@@ -120,12 +129,14 @@ export default function ModelPicker({ value, onChange }: ModelPickerProps) {
       const res = await fetch("http://localhost:8000/test-connection", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ llm_config: value }),
+        // Merge api_key in for this call only — it never lives in value/localStorage
+        body: JSON.stringify({ llm_config: { ...value, api_key: apiKey } }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setTestStatus((p) => ({ ...p, [provider]: "ok" }));
         setTestMessages((p) => ({ ...p, [provider]: "Connected! Model is responding." }));
+        onTestSuccess?.();
       } else {
         setTestStatus((p) => ({ ...p, [provider]: "error" }));
         setTestMessages((p) => ({ ...p, [provider]: data.error || "Connection failed" }));
@@ -198,7 +209,7 @@ export default function ModelPicker({ value, onChange }: ModelPickerProps) {
                 <input
                   type={field.secret ? "password" : "text"}
                   placeholder={field.placeholder}
-                  value={(value as any)?.[field.key] || ""}
+                  value={field.key === "api_key" ? apiKey : ((value as any)?.[field.key] || "")}
                   onChange={(e) => handleFieldChange(field.key, e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
                 />

@@ -1,0 +1,150 @@
+%-----------------------------------------------------------------------------------------------------------------------------------------------%
+%   The MIT License (MIT)
+%-----------------------------------------------------------------------------------------------------------------------------------------------%
+
+\documentclass[a4paper,10.5pt]{article} % slightly smaller font
+
+%----------------------------------------------------------------------------------------
+%   PACKAGES
+%----------------------------------------------------------------------------------------
+\usepackage{url}
+\usepackage{parskip} 
+\usepackage{color}
+\usepackage{graphicx}
+\usepackage[usenames,dvipsnames]{xcolor}
+\usepackage[scale=0.9]{geometry}
+\geometry{top=1.2cm, bottom=1.2cm, left=1.2cm, right=1.2cm}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{titlesec}    
+\usepackage{multicol}
+\usepackage{fontawesome5}
+\usepackage[unicode, draft=false]{hyperref}
+
+\definecolor{linkcolour}{rgb}{0,0.2,0.6}
+\hypersetup{colorlinks,breaklinks,urlcolor=linkcolour,linkcolor=linkcolour}
+
+% Section title styling (smaller + tighter)
+\titleformat{\section}{\Large\scshape\raggedright}{}{0em}{}[\titlerule]
+\titlespacing{\section}{0pt}{5pt}{5pt}
+
+% Tabular and bullet adjustments
+\newcolumntype{C}{>{\centering\arraybackslash}X}
+\newenvironment{joblong}[2]{
+  \begin{tabularx}{\linewidth}{@{}l X r@{}}
+  \textbf{#1} & & #2 \\
+  \end{tabularx}
+  \vspace{-15pt}
+  \begin{itemize}[nosep, leftmargin=1em, itemsep=3pt,label=$\bullet$]
+}{\end{itemize}}
+
+%----------------------------------------------------------------------------------------
+\begin{document}
+\pagestyle{empty}
+
+%----------------------------------------------------------------------------------------
+%   HEADER
+%----------------------------------------------------------------------------------------
+\begin{center}
+{\huge \textbf{Kalyaan Kanugula}} \\[3pt]
+Chico, CA $|$ +1 (530) 321-0134 $|$ \href{mailto:kalyaankanugula@gmail.com}{kalyaankanugula@gmail.com} $|$ \href{https://www.linkedin.com/in/kkalyaan/}{linkedin.com/in/kkalyaan}
+\end{center}
+
+%----------------------------------------------------------------------------------------
+%   SUMMARY
+%----------------------------------------------------------------------------------------
+\section*{Summary}
+Software Engineer with an MS in Computer Science and hands-on experience 
+building and monitoring distributed backend systems within globally deployed, 
+high-availability infrastructure at Amazon. Proficient in Python, Java, and 
+C++ with a strong foundation in observability, system diagnostics, and 
+reliability engineering. Experienced designing and implementing automation 
+frameworks that detect anomalies before production rollout and restore 
+system availability at scale.
+
+%----------------------------------------------------------------------------------------
+%   TECHNICAL SKILLS
+%----------------------------------------------------------------------------------------
+\section*{Technical Skills}
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\textbf{Programming}      & Java, Go (GoLang), Python, C++, Object-Oriented Programming\\[2pt]
+\textbf{Frameworks} & Spring Boot, FastAPI, REST APIs, gRPC, GraphQL\\[2pt]
+\textbf{Tools} & Git, Maven, Docker, Kubernetes, TDD, CI/CD, Linux, Monitoring, Observability\\[2pt]
+\textbf{Cloud}            & AWS (Lambda, S3, Athena, EC2, SQS, ECR)\\[2pt]
+\textbf{Databases}        & PostgreSQL, Redis, SimpleDB, DynamoDB\\[2pt]
+\end{tabularx}
+
+%----------------------------------------------------------------------------------------
+%   EDUCATION
+%----------------------------------------------------------------------------------------
+\section*{Education}
+\textbf{California State University, Chico} \hfill August 2025 \\
+Master of Science in Computer Science
+
+\vspace{3pt}
+\textbf{Jawaharlal Nehru Technological University, Hyderabad} \hfill May 2019 \\
+Bachelor of Science in Computer Science
+
+
+%----------------------------------------------------------------------------------------
+%   EXPERIENCE
+%----------------------------------------------------------------------------------------
+\section*{Professional Experience}
+
+\begin{joblong}{Research Assistant $|$ California State University, Chico, USA}{September 2025 -- Present}
+\item Designed and shipped a self-improving 4-agent LLM system end-to-end 
+using Claude API and GLM 4.6, owning technical design, implementation, 
+benchmarking, and observability infrastructure independently.
+\item Built observability and diagnostics infrastructure for a distributed 
+multi-agent system, tracking per-turn logs, token costs, and agent diffs 
+across 15+ configurable parameters using a SQLite-backed logging layer, 
+measured against throughput and latency SLAs.
+\end{joblong}
+
+\begin{joblong}{Pricing Systems Engineer $|$ Amazon, Bangalore, India}{December 2020 -- July 2023}
+\item Monitored globally deployed pricing services serving millions of daily 
+transactions, acting as DRI to detect degradation and restore 99.9\% system 
+availability by diagnosing root causes in Java microservice behavior and 
+distributed system logs.
+\item Reduced manual data validation effort by 95\% by building Python ETL pipelines from scratch to ingest, transform, and reformat raw CSV data from upstream pricing systems into formats consumable by dashboards and analytical tools.
+\item Maintained 90\% system availability during pre-production cycles by 
+executing large-scale simulation runs, triaging failures, and recommending 
+corrective actions before production rollout following established playbooks.
+\item Improved system reliability and reduced operational toil by migrating 
+legacy pricing workflows to a serverless AWS architecture using Lambda, S3, 
+and Athena, cutting release cycles from 2 days to 2 hours.
+\item Partnered closely with business stakeholders and senior engineers in 
+an Agile environment to translate operational pricing requirements into 
+reliable backend solutions, raising team code quality scores from 4.5 to 4.95.
+
+\end{joblong}
+
+\begin{joblong}{ML Analyst $|$ Amazon, Hyderabad, India}{October 2019 -- June 2020}
+\item Improved ML model accuracy by 12\% and boosted data throughput by 30\% by tuning hyperparameters and automating dataset quality validation pipelines in Python.
+\item Increased annotation throughput by 18\% by streamlining labeling SOPs without compromising model accuracy.
+
+
+\end{joblong}
+
+
+%----------------------------------------------------------------------------------------
+%   PROJECTS
+%----------------------------------------------------------------------------------------
+\section*{Projects}
+
+\begin{joblong}{GitLab Open Source Contributions} {February 2025  – Present}
+\item Contributed production-quality Go code to the go-gitlab open source 
+client, implementing Direct Transfer API support in \texttt{bulk\_imports.go} 
+with full unit test coverage and exposed \texttt{show\_default\_award\_emoji} 
+in the GitLab Ruby API, MR approved pending final merge.
+\end{joblong}
+
+\begin{joblong}{Cloud \& Edge Face Recognition Platform}{January 2025 -- May 2025}
+\item Built distributed AI inference platform sustaining 1,000 concurrent requests under 300ms latency using Docker containerization and auto-scaling across AWS EC2, S3, SQS, and Lambda.
+\end{joblong}
+
+\begin{joblong}{Performance Benchmarking of REST vs GraphQL APIs}{January 2025 -- May 2025}
+\item Architected and benchmarked REST and GraphQL APIs sustaining 10,000 req/sec with 40\% P95 latency reduction over a 2.3M-row dataset using cursor-based pagination and rigorous code review.
+\end{joblong}
+
+\end{document}

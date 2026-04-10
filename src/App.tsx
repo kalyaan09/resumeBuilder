@@ -10,6 +10,7 @@ function App() {
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [sidecarReady, setSidecarReady] = useState(false);
   const [sidecarError, setSidecarError] = useState<string | null>(null);
+  const [sidecarConnecting, setSidecarConnecting] = useState(true);
 
   useEffect(() => {
     // Check if setup has been completed
@@ -29,19 +30,28 @@ function App() {
     checkSidecar();
   }, []);
 
-  async function checkSidecar() {
-    try {
-      const res = await fetch("http://localhost:8000/health");
-      if (res.ok) {
-        setSidecarReady(true);
-      } else {
-        setSidecarError("Sidecar returned an error");
+  async function checkSidecar(retries = 8, delayMs = 1500) {
+    setSidecarConnecting(true);
+    for (let i = 0; i < retries; i++) {
+      try {
+        const res = await fetch("http://localhost:8000/health");
+        if (res.ok) {
+          setSidecarReady(true);
+          setSidecarError(null);
+          setSidecarConnecting(false);
+          return;
+        }
+      } catch {
+        // Not reachable yet
       }
-    } catch {
-      setSidecarError(
-        "Python sidecar is not running. Start it with: cd python && pip install -r requirements.txt && python main.py"
-      );
+      if (i < retries - 1) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
     }
+    setSidecarConnecting(false);
+    setSidecarError(
+      "Python sidecar is not running. Start it with: cd python && python main.py"
+    );
   }
 
   if (setupComplete === null) {
@@ -65,7 +75,12 @@ function App() {
           </button>
         </div>
       )}
-      {!sidecarError && sidecarReady && (
+      {!sidecarError && sidecarConnecting && (
+        <div className="bg-gray-50 border-b border-gray-200 px-4 py-1 text-xs text-gray-500 text-center">
+          Connecting to AI sidecar…
+        </div>
+      )}
+      {!sidecarError && sidecarReady && !sidecarConnecting && (
         <div className="bg-green-50 border-b border-green-200 px-4 py-1 text-xs text-green-700 text-center">
           ✓ AI sidecar connected
         </div>

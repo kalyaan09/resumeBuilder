@@ -73,7 +73,6 @@ export default function Setup({ onComplete }: SetupProps) {
         userInstructions,
         templateName,
         templateContent,
-        templatePath: savePath,
         researchName,
         researchContent,
         savePath,
@@ -345,9 +344,24 @@ export default function Setup({ onComplete }: SetupProps) {
                     onChange={(e) => setSavePath(e.target.value)}
                     className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono"
                   />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const { open } = await import("@tauri-apps/plugin-dialog");
+                        const selected = await open({ directory: true, multiple: false });
+                        if (selected && typeof selected === "string") setSavePath(selected);
+                      } catch {
+                        // Not in Tauri — user types the path manually
+                      }
+                    }}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-600 hover:bg-gray-50 whitespace-nowrap"
+                  >
+                    Browse…
+                  </button>
                 </div>
                 <p className="text-xs text-gray-400 mt-1">
-                  Type the full path to a folder on your Mac
+                  Type a path or click Browse to pick a folder
                 </p>
               </div>
 
