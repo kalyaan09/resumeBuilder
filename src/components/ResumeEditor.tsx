@@ -6,6 +6,8 @@ interface ResumeEditorProps {
   onSectionChange: (key: string, content: any) => void;
   onReaskSection: (key: string, feedback: string) => Promise<void>;
   onResetSection: (key: string) => void;
+  label?: string;
+  showReask?: boolean;
 }
 
 export default function ResumeEditor({
@@ -14,11 +16,13 @@ export default function ResumeEditor({
   onSectionChange,
   onReaskSection,
   onResetSection,
+  label = "Edited Resume",
+  showReask = true,
 }: ResumeEditorProps) {
   return (
     <div className="space-y-4">
       <h2 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">
-        Edited Resume
+        {label}
       </h2>
       {Object.entries(sections).map(([key, content]) => (
         <SectionBlock
@@ -29,6 +33,7 @@ export default function ResumeEditor({
           onChange={(newContent) => onSectionChange(key, newContent)}
           onReask={(feedback) => onReaskSection(key, feedback)}
           onReset={() => onResetSection(key)}
+          showReask={showReask}
         />
       ))}
     </div>

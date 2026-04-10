@@ -16,16 +16,16 @@ class LLMClient:
         base_url = config.get("base_url", "")
         return cls(provider=provider, model=model, api_key=api_key, base_url=base_url)
 
-    def complete(self, system_prompt: str, user_prompt: str) -> str:
+    def complete(self, system_prompt: str, user_prompt: str, max_tokens: int = 4096) -> str:
         if self.provider == "anthropic":
-            return self._complete_anthropic(system_prompt, user_prompt)
+            return self._complete_anthropic(system_prompt, user_prompt, max_tokens)
         elif self.provider == "gemini":
-            return self._complete_gemini(system_prompt, user_prompt)
+            return self._complete_gemini(system_prompt, user_prompt, max_tokens)
         else:
             # Ollama, OpenRouter, Groq, OpenAI — all OpenAI-compatible
-            return self._complete_openai_compat(system_prompt, user_prompt)
+            return self._complete_openai_compat(system_prompt, user_prompt, max_tokens)
 
-    def _complete_openai_compat(self, system_prompt: str, user_prompt: str) -> str:
+    def _complete_openai_compat(self, system_prompt: str, user_prompt: str, max_tokens: int) -> str:
         from openai import OpenAI
 
         kwargs = {"api_key": self.api_key or "ollama"}
@@ -47,28 +47,33 @@ class LLMClient:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
+            max_tokens=max_tokens,
         )
         return response.choices[0].message.content or ""
 
-    def _complete_anthropic(self, system_prompt: str, user_prompt: str) -> str:
+    def _complete_anthropic(self, system_prompt: str, user_prompt: str, max_tokens: int) -> str:
         import anthropic
 
         client = anthropic.Anthropic(api_key=self.api_key)
         message = client.messages.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
         return message.content[0].text
 
-    def _complete_gemini(self, system_prompt: str, user_prompt: str) -> str:
-        import google.generativeai as genai
+    def _complete_gemini(self, system_prompt: str, user_prompt: str, max_tokens: int) -> str:
+        from google import genai
+        from google.genai import types
 
-        genai.configure(api_key=self.api_key)
-        model = genai.GenerativeModel(
-            model_name=self.model,
-            system_instruction=system_prompt,
+        client = genai.Client(api_key=self.api_key)
+        response = client.models.generate_content(
+            model=self.model,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=max_tokens,
+            ),
         )
-        response = model.generate_content(user_prompt)
         return response.text

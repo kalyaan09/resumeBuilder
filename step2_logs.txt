@@ -1,0 +1,237 @@
+File : /Users/kalyaankanugula/Documents/res_app/template/myresume.tex
+Exists: True
+
+============================================================
+STEP 1 — Extracted text (what the LLM receives)
+============================================================
+Kalyaan Kanugula 
+
+Chico, CA +1 (530) 321-0134 kalyaankanugula@gmail.com linkedin.com/in/kkalyaan
+
+=== Summary ===
+
+Software Engineer with an MS in Computer Science and hands-on experience 
+building and monitoring distributed backend systems within globally deployed, 
+high-availability infrastructure at Amazon. Proficient in Python, Java, and 
+C++ with a strong foundation in observability, system diagnostics, and 
+reliability engineering. Experienced designing and implementing automation 
+frameworks that detect anomalies before production rollout and restore 
+system availability at scale.
+
+=== Technical Skills ===
+
+ 
+Programming Java, Go (GoLang), Python, C++, Object-Oriented Programming
+
+Frameworks Spring Boot, FastAPI, REST APIs, gRPC, GraphQL
+
+Tools Git, Maven, Docker, Kubernetes, TDD, CI/CD, Linux, Monitoring, Observability
+
+Cloud AWS (Lambda, S3, Athena, EC2, SQS, ECR)
+
+Databases PostgreSQL, Redis, SimpleDB, DynamoDB
+
+=== Education ===
+
+California State University, Chico August 2025 
+
+Master of Science in Computer Science
+
+Jawaharlal Nehru Technological University, Hyderabad May 2019 
+
+Bachelor of Science in Computer Science
+
+=== Professional Experience ===
+
+Research Assistant California State University, Chico, USA September 2025 -- Present
+
+- Designed and shipped a self-improving 4-agent LLM system end-to-end 
+using Claude API and GLM 4.6, owning technical design, implementation, 
+benchmarking, and observability infrastructure independently.
+
+- Built observability and diagnostics infrastructure for a distributed 
+multi-agent system, tracking per-turn logs, token costs, and agent diffs 
+across 15+ configurable parameters using a SQLite-backed logging layer, 
+measured against throughput and latency SLAs.
+
+Pricing Systems Engineer Amazon, Bangalore, India December 2020 -- July 2023
+
+- Monitored globally deployed pricing services serving millions of daily 
+transactions, acting as DRI to detect degradation and restore 99.9% system 
+availability by diagnosing root causes in Java microservice behavior and 
+distributed system logs.
+
+- Reduced manual data validation effort by 95% by building Python ETL pipelines from scratch to ingest, transform, and reformat raw CSV data from upstream pricing systems into formats consumable by dashboards and analytical tools.
+
+- Maintained 90% system availability during pre-production cycles by 
+executing large-scale simulation runs, triaging failures, and recommending 
+corrective actions before production rollout following established playbooks.
+
+- Improved system reliability and reduced operational toil by migrating 
+legacy pricing workflows to a serverless AWS architecture using Lambda, S3, 
+and Athena, cutting release cycles from 2 days to 2 hours.
+
+- Partnered closely with business stakeholders and senior engineers in 
+an Agile environment to translate operational pricing requirements into 
+reliable backend solutions, raising team code quality scores from 4.5 to 4.95.
+
+ML Analyst Amazon, Hyderabad, India October 2019 -- June 2020
+
+- Improved ML model accuracy by 12% and boosted data throughput by 30% by tuning hyperparameters and automating dataset quality validation pipelines in Python.
+
+- Increased annotation throughput by 18% by streamlining labeling SOPs without compromising model accuracy.
+
+=== Projects ===
+
+GitLab Open Source Contributions February 2025 – Present
+
+- Contributed production-quality Go code to the go-gitlab open source 
+client, implementing Direct Transfer API support in bulk_imports.go 
+with full unit test coverage and exposed show_default_award_emoji 
+in the GitLab Ruby API, MR approved pending final merge.
+
+Cloud and Edge Face Recognition Platform January 2025 -- May 2025
+
+- Built distributed AI inference platform sustaining 1,000 concurrent requests under 300ms latency using Docker containerization and auto-scaling across AWS EC2, S3, SQS, and Lambda.
+
+Performance Benchmarking of REST vs GraphQL APIs January 2025 -- May 2025
+
+- Architected and benchmarked REST and GraphQL APIs sustaining 10,000 req/sec with 40% P95 latency reduction over a 2.3M-row dataset using cursor-based pagination and rigorous code review.
+
+(4148 chars)
+
+Config: gemini / gemini-2.0-flash  (from GEMINI_API_KEY)
+============================================================
+STEP 2 — Calling LLM (10-30s)...
+============================================================
+/Users/kalyaankanugula/Documents/res_app/python/llm_client.py:67: FutureWarning: 
+
+All support for the `google.generativeai` package has ended. It will no longer be receiving 
+updates or bug fixes. Please switch to the `google.genai` package as soon as possible.
+See README for more details:
+
+https://github.com/google-gemini/deprecated-generative-ai-python/blob/main/README.md
+
+  import google.generativeai as genai
+Traceback (most recent call last):
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/google/api_core/grpc_helpers.py", line 55, in error_remapped_callable
+    return callable_(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/grpc/_interceptor.py", line 276, in __call__
+    response, ignored_call = self._with_call(
+                             ^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/grpc/_interceptor.py", line 331, in _with_call
+    return call.result(), call
+           ^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/grpc/_channel.py", line 438, in result
+    raise self
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/grpc/_interceptor.py", line 314, in continuation
+    response, call = self._thunk(new_method).with_call(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/grpc/_channel.py", line 1173, in with_call
+    return _end_unary_response_blocking(state, call, True, None)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/grpc/_channel.py", line 990, in _end_unary_response_blocking
+    raise _InactiveRpcError(state)  # pytype: disable=not-instantiable
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+grpc._channel._InactiveRpcError: <_InactiveRpcError of RPC that terminated with:
+	status = StatusCode.RESOURCE_EXHAUSTED
+	details = "You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 5.765607831s."
+	debug_error_string = "UNKNOWN:Error received from peer ipv6:%5B2607:f8b0:4005:803::200a%5D:443 {grpc_message:"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash\nPlease retry in 5.765607831s.", grpc_status:8}"
+>
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/kalyaankanugula/Documents/res_app/python/test_extractor.py", line 105, in <module>
+    main()
+  File "/Users/kalyaankanugula/Documents/res_app/python/test_extractor.py", line 91, in main
+    result = extract_resume_to_json(file_bytes, extension, client)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/res_app/python/resume_extractor.py", line 287, in extract_resume_to_json
+    response = llm_client.complete(
+               ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/res_app/python/llm_client.py", line 23, in complete
+    return self._complete_gemini(system_prompt, user_prompt, max_tokens)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/res_app/python/llm_client.py", line 75, in _complete_gemini
+    response = model.generate_content(
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/google/generativeai/generative_models.py", line 331, in generate_content
+    response = self._client.generate_content(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/google/ai/generativelanguage_v1beta/services/generative_service/client.py", line 835, in generate_content
+    response = rpc(
+               ^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/google/api_core/gapic_v1/method.py", line 128, in __call__
+    return wrapped_func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/google/api_core/retry/retry_unary.py", line 294, in retry_wrapped_func
+    return retry_target(
+           ^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/google/api_core/retry/retry_unary.py", line 156, in retry_target
+    next_sleep = _retry_error_helper(
+                 ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/google/api_core/retry/retry_base.py", line 216, in _retry_error_helper
+    raise final_exc from source_exc
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/google/api_core/retry/retry_unary.py", line 147, in retry_target
+    result = target()
+             ^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/google/api_core/timeout.py", line 130, in func_with_timeout
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kalyaankanugula/Documents/resume_app/env/lib/python3.12/site-packages/google/api_core/grpc_helpers.py", line 57, in error_remapped_callable
+    raise exceptions.from_grpc_error(exc) from exc
+google.api_core.exceptions.ResourceExhausted: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 5.765607831s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_input_token_count"
+  quota_id: "GenerateContentInputTokensPerModelPerMinute-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.0-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+}
+violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.0-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+}
+violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.0-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+}
+, retry_delay {
+  seconds: 5
+}
+]
+(env) kalyaankanugula@Kalyaans-MacBook-Pro python % 

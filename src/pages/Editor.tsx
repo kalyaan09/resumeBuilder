@@ -2,104 +2,116 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import ResumeEditor from "../components/ResumeEditor";
 import { getApiKey } from "../lib/secureStore";
+import { readConfig, readResume } from "../lib/persistenceStore";
 
-const SIDECAR_URL = "http://localhost:8000";
+const SIDECAR = "http://localhost:8000";
+
+// Returns an ordered subset of the resume keyed by activeSections.
+// `basics` is always excluded — it's rendered in the template header, not the editor.
+function filterSections(
+  resume: Record<string, unknown>,
+  sectionOrder: string[],
+  activeSections: string[]
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of sectionOrder) {
+    if (key !== "basics" && activeSections.includes(key) && resume[key] !== undefined) {
+      result[key] = resume[key];
+    }
+  }
+  return result;
+}
 
 export default function Editor() {
   const navigate = useNavigate();
-  const [config, setConfig] = useState<any>(null);
+
+  // Persistent data
+  const [config, setConfig] = useState<Record<string, unknown> | null>(null);
+  const [masterResume, setMasterResume] = useState<Record<string, unknown> | null>(null);
+
+  // Display slices (filtered + ordered)
+  const [masterSections, setMasterSections] = useState<Record<string, unknown> | null>(null);
+  const [editedSections, setEditedSections] = useState<Record<string, unknown> | null>(null);
+
+  // Full edited JSON Resume (needed for re-ask and export)
+  const [editedResume, setEditedResume] = useState<Record<string, unknown> | null>(null);
+
+  // UI state
   const [jdText, setJdText] = useState("");
-  const [sections, setSections] = useState<any>(null);
-  const [originalSections, setOriginalSections] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
-  const [texExportLoading, setTexExportLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [jdCollapsed, setJdCollapsed] = useState(false);
   const [lastExportPath, setLastExportPath] = useState<string | null>(null);
-  const [researchText, setResearchText] = useState<string>("");
-  const [templateLoading, setTemplateLoading] = useState(false);
+  const [jdCollapsed, setJdCollapsed] = useState(false);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  // ── Load config + master resume from disk ──────────────────────────────────
 
   useEffect(() => {
-    const raw = localStorage.getItem("resume_editor_config");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      setConfig(parsed);
-      // Auto-parse template on load
-      if (parsed.templateContent && parsed.templateName) {
-        parseTemplate(parsed);
-      }
-      // Parse research file once — extract plain text, don't re-send base64 on every call
-      if (parsed.researchContent && parsed.researchName) {
-        parseResearch(parsed);
-      }
-    }
+    Promise.all([readConfig(), readResume()])
+      .then(([cfg, resume]) => {
+        setConfig(cfg);
+        setMasterResume(resume);
+
+        if (cfg && resume) {
+          const order = (cfg.sectionOrder as string[]) || Object.keys(resume);
+          const active = (cfg.activeSections as string[]) || order;
+          setMasterSections(filterSections(resume, order, active));
+        }
+      })
+      .finally(() => setDataLoading(false));
   }, []);
 
-  async function parseResearch(cfg: any) {
-    try {
-      const res = await fetch(`${SIDECAR_URL}/parse-research`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          file_content: cfg.researchContent,
-          file_name: cfg.researchName,
-        }),
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      setResearchText(data.text || "");
-    } catch {
-      // Non-critical — editing still works without research context
-    }
+  // Recompute editedSections whenever editedResume or config changes
+  useEffect(() => {
+    if (!editedResume || !config) return;
+    const order = (config.sectionOrder as string[]) || Object.keys(editedResume);
+    const active = (config.activeSections as string[]) || order;
+    setEditedSections(filterSections(editedResume, order, active));
+  }, [editedResume, config]);
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  async function fullLlmConfig() {
+    const base = (config?.modelConfig as Record<string, string>) || {};
+    const api_key = await getApiKey(base.provider || "").catch(() => "");
+    return { ...base, api_key };
   }
 
-  async function parseTemplate(cfg: any) {
-    setTemplateLoading(true);
-    try {
-      const res = await fetch(`${SIDECAR_URL}/parse-resume`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          file_content: cfg.templateContent,
-          file_name: cfg.templateName,
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      setOriginalSections(data.sections);
-    } catch (e: any) {
-      console.error("Failed to parse template:", e);
-    } finally {
-      setTemplateLoading(false);
-    }
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 6000);
   }
+
+  // ── Edit ───────────────────────────────────────────────────────────────────
 
   async function handleEdit() {
-    if (!jdText.trim()) return;
+    if (!jdText.trim() || !masterResume) return;
     setLoading(true);
     setError(null);
     setJdCollapsed(true);
 
     try {
-      const res = await fetch(`${SIDECAR_URL}/edit-resume`, {
+      const res = await fetch(`${SIDECAR}/edit-resume`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           jd_text: jdText,
-          resume_sections: originalSections,
-          user_instructions: config?.userInstructions || "",
-          research_text: researchText,
-          page_count: config?.pageCount || 1,
-          target_role: config?.targetRole || "",
+          master_resume: masterResume,
+          user_instructions: (config?.userInstructions as string) || "",
+          research_text: "",
           llm_config: await fullLlmConfig(),
         }),
       });
 
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || "Edit failed");
+      }
+
       const data = await res.json();
-      setSections(data.sections);
+      setEditedResume(data.resume);
     } catch (e: any) {
       setError(e.message || "Failed to edit resume");
     } finally {
@@ -107,25 +119,70 @@ export default function Editor() {
     }
   }
 
+  // ── Section editing ────────────────────────────────────────────────────────
+
+  function handleSectionChange(key: string, newContent: unknown) {
+    setEditedResume((prev) => (prev ? { ...prev, [key]: newContent } : prev));
+  }
+
+  function handleResetSection(key: string) {
+    if (masterResume?.[key] !== undefined) {
+      setEditedResume((prev) => (prev ? { ...prev, [key]: masterResume[key] } : prev));
+    }
+  }
+
+  async function handleReaskSection(key: string, feedback: string) {
+    const res = await fetch(`${SIDECAR}/reask-section`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        section_key: key,
+        section_content: editedResume?.[key],
+        feedback,
+        jd_text: jdText,
+        user_instructions: (config?.userInstructions as string) || "",
+        llm_config: await fullLlmConfig(),
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Re-ask failed");
+    }
+
+    const data = await res.json();
+    setEditedResume((prev) => (prev ? { ...prev, [key]: data.content } : prev));
+  }
+
+  // ── Export PDF ─────────────────────────────────────────────────────────────
+  // Calls the /export-pdf shape that will be implemented in step 5 (Puppeteer).
+
   async function handleExport() {
+    if (!editedResume) return;
     setExportLoading(true);
+    setError(null);
+
     try {
-      const res = await fetch(`${SIDECAR_URL}/export-pdf`, {
+      const res = await fetch(`${SIDECAR}/export-pdf`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sections,
-          original_sections: originalSections,
-          template_content: config?.templateContent,
-          template_name: config?.templateName,
-          save_path: config?.savePath || "~/Documents",
+          resume: editedResume,
+          template: (config?.template as string) || "jake",
+          section_order: (config?.sectionOrder as string[]) || [],
+          active_sections: (config?.activeSections as string[]) || [],
+          save_path: (config?.savePath as string) || "~/Documents/Resumes",
         }),
       });
-      if (!res.ok) throw new Error(await res.text());
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || "Export failed");
+      }
+
       const data = await res.json();
       setLastExportPath(data.file_path);
-      setToast(`✓ Saved to ${data.file_path}`);
-      setTimeout(() => setToast(null), 6000);
+      showToast(`Saved to ${data.file_path}`);
     } catch (e: any) {
       setError(e.message || "Export failed");
     } finally {
@@ -133,106 +190,46 @@ export default function Editor() {
     }
   }
 
-  async function handleTexExport() {
-    setTexExportLoading(true);
-    try {
-      const res = await fetch(`${SIDECAR_URL}/export-tex`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sections,
-          original_sections: originalSections,
-          template_content: config?.templateContent,
-          template_name: config?.templateName,
-          save_path: config?.savePath || "~/Documents",
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      setLastExportPath(data.edited_path);
-      setToast(`✓ Saved .tex to ${data.edited_path}`);
-      setTimeout(() => setToast(null), 6000);
-    } catch (e: any) {
-      setError(e.message || "Export failed");
-    } finally {
-      setTexExportLoading(false);
-    }
-  }
-
-  async function handleReaskSection(sectionKey: string, feedback: string) {
-    try {
-      const res = await fetch(`${SIDECAR_URL}/reask-section`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          section_key: sectionKey,
-          section_content: sections[sectionKey],
-          feedback,
-          jd_text: jdText,
-          user_instructions: config?.userInstructions || "",
-          llm_config: await fullLlmConfig(),
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      setSections((prev: any) => ({ ...prev, [sectionKey]: data.content }));
-    } catch (e: any) {
-      throw new Error(e.message || "Failed to re-ask");
-    }
-  }
-
   async function showInFinder(filePath: string) {
     try {
-      await fetch(`${SIDECAR_URL}/open-folder`, {
+      await fetch(`${SIDECAR}/open-folder`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: filePath }),
       });
     } catch {
-      // Ignore — non-critical
+      // Non-critical
     }
   }
 
-  function handleResetSection(sectionKey: string) {
-    if (originalSections?.[sectionKey] !== undefined) {
-      setSections((prev: any) => ({
-        ...prev,
-        [sectionKey]: originalSections[sectionKey],
-      }));
-    }
+  // ── Gates ──────────────────────────────────────────────────────────────────
+
+  if (dataLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
+      </div>
+    );
   }
 
-  function handleSectionChange(sectionKey: string, newContent: any) {
-    setSections((prev: any) => ({ ...prev, [sectionKey]: newContent }));
-  }
-
-  async function fullLlmConfig() {
-    const base = config?.modelConfig || {};
-    const api_key = await getApiKey(base.provider || "").catch(() => "");
-    return { ...base, api_key };
-  }
-
-  const modelReady = !!config?.modelTested;
-
-  // Hard gate — must have a verified model before using the editor
-  if (config && !modelReady) {
+  if (!config?.setupComplete || !masterResume) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col">
-        <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-4">
+        <div className="bg-white border-b border-gray-200 px-6 py-3">
           <h1 className="text-lg font-semibold text-gray-800">Resume Editor</h1>
         </div>
         <div className="flex-1 flex items-center justify-center p-6">
           <div className="bg-white rounded-2xl border border-amber-200 shadow-sm p-10 max-w-md w-full text-center space-y-4">
-            <div className="text-4xl">⚠</div>
-            <h2 className="text-xl font-semibold text-gray-800">No AI model connected</h2>
+            <div className="text-4xl">📄</div>
+            <h2 className="text-xl font-semibold text-gray-800">No master resume found</h2>
             <p className="text-sm text-gray-500">
-              You need to configure and successfully test an AI model before you can edit your resume.
+              Complete the setup flow to extract your resume and configure your AI model.
             </p>
             <button
-              onClick={() => navigate("/settings")}
+              onClick={() => navigate("/setup")}
               className="mt-2 px-6 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors"
             >
-              Go to Settings
+              Go to Setup
             </button>
           </div>
         </div>
@@ -240,29 +237,22 @@ export default function Editor() {
     );
   }
 
+  // ── Main UI ────────────────────────────────────────────────────────────────
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Top nav */}
       <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-4 sticky top-0 z-10">
         <h1 className="text-lg font-semibold text-gray-800">Resume Editor</h1>
         <div className="ml-auto flex items-center gap-3">
-          {sections && (
-            <>
-              <button
-                onClick={handleTexExport}
-                disabled={texExportLoading || !config?.templateName?.endsWith(".tex")}
-                className="px-4 py-1.5 bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
-              >
-                {texExportLoading ? "Exporting..." : "Export .tex"}
-              </button>
-              <button
-                onClick={handleExport}
-                disabled={exportLoading}
-                className="px-4 py-1.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
-              >
-                {exportLoading ? "Exporting..." : "Export PDF"}
-              </button>
-            </>
+          {editedSections && (
+            <button
+              onClick={handleExport}
+              disabled={exportLoading}
+              className="px-4 py-1.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
+            >
+              {exportLoading ? "Exporting..." : "Export PDF"}
+            </button>
           )}
           <button
             onClick={() => navigate("/settings")}
@@ -275,7 +265,7 @@ export default function Editor() {
 
       <div className="flex-1 max-w-5xl mx-auto w-full p-6 space-y-6">
 
-        {/* JD Input */}
+        {/* JD input */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div
             className="flex items-center justify-between px-5 py-3 cursor-pointer hover:bg-gray-50"
@@ -295,29 +285,21 @@ export default function Editor() {
               />
               <button
                 onClick={handleEdit}
-                disabled={!jdText.trim() || loading || !originalSections}
+                disabled={!jdText.trim() || loading}
                 className="w-full py-2.5 bg-brand-600 text-white rounded-lg font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-brand-700 transition-colors"
               >
-                {loading ? "Editing resume..." : "Edit My Resume"}
+                {loading ? "Editing resume..." : "Tailor My Resume"}
               </button>
-              {!originalSections && (
-                <p className="text-xs text-gray-400 text-center flex items-center justify-center gap-2">
-                  {templateLoading && (
-                    <span className="inline-block w-3 h-3 border border-gray-300 border-t-gray-500 rounded-full animate-spin" />
-                  )}
-                  {templateLoading ? "Parsing template..." : "Waiting for template to parse..."}
-                </p>
-              )}
             </div>
           )}
         </div>
 
-        {/* Loading state */}
+        {/* Loading */}
         {loading && (
           <div className="flex items-center justify-center py-16">
             <div className="text-center space-y-3">
               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-brand-600 mx-auto" />
-              <p className="text-gray-500 text-sm">AI is editing your resume...</p>
+              <p className="text-gray-500 text-sm">AI is tailoring your resume to the job description...</p>
             </div>
           </div>
         )}
@@ -327,20 +309,17 @@ export default function Editor() {
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
             <span className="text-red-600">✕</span>
             <span className="text-sm text-red-800 flex-1">{error}</span>
-            <button
-              onClick={handleEdit}
-              className="text-red-600 underline text-sm"
-            >
+            <button onClick={handleEdit} className="text-red-600 underline text-sm">
               Retry
             </button>
           </div>
         )}
 
-        {/* Resume sections */}
-        {sections && !loading && (
+        {/* Edited resume sections */}
+        {editedSections && !loading && (
           <ResumeEditor
-            sections={sections}
-            originalSections={originalSections}
+            sections={editedSections}
+            originalSections={masterSections}
             onSectionChange={handleSectionChange}
             onReaskSection={handleReaskSection}
             onResetSection={handleResetSection}

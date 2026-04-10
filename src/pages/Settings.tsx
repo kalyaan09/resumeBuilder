@@ -1,141 +1,386 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import ModelPicker from "../components/ModelPicker";
+import ResumeEditor from "../components/ResumeEditor";
 import { getApiKey, setApiKey } from "../lib/secureStore";
+import { readConfig, writeConfig, readResume, writeResume } from "../lib/persistenceStore";
+
+const SIDECAR = "http://localhost:8000";
+
+interface Suggestion {
+  section: string;
+  type: "error" | "warning" | "info";
+  message: string;
+}
+
+const SUGGESTION_STYLES: Record<string, { bg: string; border: string; text: string; badge: string }> = {
+  error:   { bg: "bg-red-50",    border: "border-red-200",    text: "text-red-800",    badge: "bg-red-100 text-red-700" },
+  warning: { bg: "bg-amber-50",  border: "border-amber-200",  text: "text-amber-800",  badge: "bg-amber-100 text-amber-700" },
+  info:    { bg: "bg-blue-50",   border: "border-blue-200",   text: "text-blue-800",   badge: "bg-blue-100 text-blue-700" },
+};
+
+// Build an ordered section map: basics first, then sectionOrder, then anything else.
+function buildSectionMap(
+  resume: Record<string, unknown>,
+  sectionOrder: string[]
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  if (resume.basics) result.basics = resume.basics;
+  for (const key of sectionOrder) {
+    if (key !== "basics" && resume[key] !== undefined) result[key] = resume[key];
+  }
+  for (const key of Object.keys(resume)) {
+    if (!(key in result) && resume[key] !== undefined) result[key] = resume[key];
+  }
+  return result;
+}
 
 export default function Settings() {
   const navigate = useNavigate();
-  const [config, setConfig] = useState<any>(null);
+
+  // Config state (model, instructions, save path)
+  const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [apiKey, setApiKeyState] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [configDirty, setConfigDirty] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configSaved, setConfigSaved] = useState(false);
+
+  // Resume state
+  const [masterResume, setMasterResume] = useState<Record<string, unknown> | null>(null);
+  const [editedResume, setEditedResume] = useState<Record<string, unknown> | null>(null);
+  const [displaySections, setDisplaySections] = useState<Record<string, unknown> | null>(null);
+  const [resumeDirty, setResumeDirty] = useState(false);
+  const [resumeSaving, setResumeSaving] = useState(false);
+
+  // Sync state
+  const [syncing, setSyncing] = useState(false);
+  const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  const [loading, setLoading] = useState(true);
+
+  // ── Load on mount ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    const raw = localStorage.getItem("resume_editor_config");
-    if (!raw) return;
-    const parsed = JSON.parse(raw);
-
-    // Migrate: if api_key is still sitting inside modelConfig in localStorage, pull it out
-    if (parsed.modelConfig?.api_key) {
-      const { api_key, ...safeModelConfig } = parsed.modelConfig;
-      parsed.modelConfig = safeModelConfig;
-      localStorage.setItem("resume_editor_config", JSON.stringify(parsed));
-      // Save migrated key to secure store
-      setApiKey(parsed.modelConfig.provider || "", api_key).catch(() => {});
-      setApiKeyState(api_key);
-    }
-
-    setConfig(parsed);
-
-    // Load the api_key for the current provider from secure store
-    if (parsed.modelConfig?.provider) {
-      getApiKey(parsed.modelConfig.provider).then(setApiKeyState).catch(() => {});
-    }
+    Promise.all([readConfig(), readResume()])
+      .then(([cfg, resume]) => {
+        setConfig(cfg || {});
+        if (cfg?.modelConfig) {
+          const mc = cfg.modelConfig as Record<string, string>;
+          getApiKey(mc.provider || "").then(setApiKeyState).catch(() => {});
+        }
+        if (resume) {
+          const order = (cfg?.sectionOrder as string[]) || [];
+          const sections = buildSectionMap(resume, order);
+          setMasterResume(resume);
+          setEditedResume(resume);
+          setDisplaySections(sections);
+        }
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  // When the provider tab changes, load that provider's key from secure store and reset tested flag
-  function updateConfig(updates: any) {
-    setConfig((prev: any) => {
-      const next = { ...prev, ...updates };
-      if (updates.modelConfig) {
-        // Any change to model config invalidates the tested status
-        next.modelTested = false;
-        if (updates.modelConfig.provider !== prev?.modelConfig?.provider) {
-          getApiKey(updates.modelConfig.provider).then(setApiKeyState).catch(() => {});
-        }
+  // Rebuild display whenever editedResume changes
+  useEffect(() => {
+    if (!editedResume || !config) return;
+    const order = (config.sectionOrder as string[]) || [];
+    setDisplaySections(buildSectionMap(editedResume, order));
+  }, [editedResume, config]);
+
+  // ── Config helpers ─────────────────────────────────────────────────────────
+
+  function updateConfig(updates: Record<string, unknown>) {
+    setConfig((prev) => {
+      const next = { ...(prev || {}), ...updates };
+      if (updates.modelConfig && (updates.modelConfig as any).provider !== (prev?.modelConfig as any)?.provider) {
+        const newProvider = (updates.modelConfig as any).provider as string;
+        getApiKey(newProvider).then(setApiKeyState).catch(() => {});
       }
       return next;
     });
+    setConfigDirty(true);
   }
 
   function handleApiKeyChange(key: string) {
     setApiKeyState(key);
-    // Changing the key invalidates tested status
-    setConfig((prev: any) => ({ ...prev, modelTested: false }));
+    setConfigDirty(true);
   }
 
-  function handleTestSuccess() {
-    setConfig((prev: any) => ({ ...prev, modelTested: true }));
-  }
-
-  async function handleSave() {
-    setSaving(true);
-    // Never persist api_key inside modelConfig
-    const { api_key: _drop, ...safeModelConfig } = config.modelConfig || {};
-    const safeConfig = { ...config, modelConfig: safeModelConfig };
-    localStorage.setItem("resume_editor_config", JSON.stringify(safeConfig));
-    // Save api_key to encrypted store
-    if (config.modelConfig?.provider) {
-      await setApiKey(config.modelConfig.provider, apiKey).catch(() => {});
-    }
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  }
-
-  function handleReset() {
-    if (confirm("This will clear all setup data and restart the onboarding. Continue?")) {
-      localStorage.removeItem("resume_editor_config");
-      window.location.href = "/setup";
+  async function handleSaveConfig() {
+    if (!config) return;
+    setConfigSaving(true);
+    try {
+      const { api_key: _drop, ...safeModel } = (config.modelConfig as any) || {};
+      await writeConfig({ ...config, modelConfig: safeModel });
+      const provider = (safeModel as any)?.provider || "";
+      if (provider) await setApiKey(provider, apiKey).catch(() => {});
+      setConfigDirty(false);
+      setConfigSaved(true);
+      setTimeout(() => setConfigSaved(false), 2000);
+    } finally {
+      setConfigSaving(false);
     }
   }
 
-  if (!config) return null;
+  // ── Resume helpers ─────────────────────────────────────────────────────────
+
+  function handleSectionChange(key: string, newContent: unknown) {
+    setEditedResume((prev) => (prev ? { ...prev, [key]: newContent } : prev));
+    setResumeDirty(true);
+    setSuggestions(null);
+  }
+
+  function handleResetSection(key: string) {
+    if (masterResume?.[key] !== undefined) {
+      setEditedResume((prev) => (prev ? { ...prev, [key]: masterResume[key] } : prev));
+    }
+  }
+
+  async function handleReaskSection(key: string, feedback: string) {
+    const llmConfig = await fullLlmConfig();
+    const res = await fetch(`${SIDECAR}/reask-section`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        section_key: key,
+        section_content: editedResume?.[key],
+        feedback,
+        jd_text: "",
+        user_instructions: (config?.userInstructions as string) || "",
+        llm_config: llmConfig,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || "Re-ask failed");
+    }
+    const data = await res.json();
+    setEditedResume((prev) => (prev ? { ...prev, [key]: data.content } : prev));
+    setResumeDirty(true);
+  }
+
+  async function handleSyncAndSave() {
+    if (!editedResume) return;
+    setSyncing(true);
+    setSyncError(null);
+    setSuggestions(null);
+
+    try {
+      const llmConfig = await fullLlmConfig();
+      const res = await fetch(`${SIDECAR}/sync-master-resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resume_before: masterResume || {},
+          resume_after: editedResume,
+          role: (config?.role as string) || "",
+          level: (config?.level as string) || "",
+          llm_config: llmConfig,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || "Sync failed");
+      }
+
+      const data = await res.json();
+      setSuggestions(data.suggestions || []);
+
+      // If no issues, save immediately
+      if (!data.suggestions || data.suggestions.length === 0) {
+        await saveResume();
+      }
+    } catch (e: any) {
+      setSyncError(e.message || "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function saveResume() {
+    if (!editedResume) return;
+    setResumeSaving(true);
+    try {
+      await writeResume(editedResume);
+      setMasterResume(editedResume);
+      setResumeDirty(false);
+      setSuggestions(null);
+    } finally {
+      setResumeSaving(false);
+    }
+  }
+
+  // ── Misc ───────────────────────────────────────────────────────────────────
+
+  async function fullLlmConfig() {
+    const base = (config?.modelConfig as Record<string, string>) || {};
+    const api_key = await getApiKey(base.provider || "").catch(() => "");
+    return { ...base, api_key };
+  }
+
+  async function handleReset() {
+    if (!confirm("This will clear all setup data and restart onboarding. Continue?")) return;
+    await writeConfig({ setupComplete: false });
+    await writeResume({});
+    navigate("/setup");
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Nav */}
-      <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-4">
-        <button
-          onClick={() => navigate("/editor")}
-          className="text-gray-500 hover:text-gray-700 text-sm"
-        >
+      <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-4 sticky top-0 z-10">
+        <button onClick={() => navigate("/editor")} className="text-gray-500 hover:text-gray-700 text-sm">
           ← Back to Editor
         </button>
         <h1 className="text-lg font-semibold text-gray-800">Settings</h1>
-        <div className="ml-auto flex gap-3">
+        <div className="ml-auto">
           <button
-            onClick={handleSave}
-            className="px-4 py-1.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700"
+            onClick={handleSaveConfig}
+            disabled={!configDirty || configSaving}
+            className="px-4 py-1.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-40 transition-colors"
           >
-            {saved ? "✓ Saved" : saving ? "Saving..." : "Save Changes"}
+            {configSaved ? "✓ Saved" : configSaving ? "Saving..." : "Save Settings"}
           </button>
         </div>
       </div>
 
       <div className="max-w-3xl mx-auto p-6 space-y-6">
-        {/* Resume preferences */}
-        <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-          <h2 className="font-semibold text-gray-800">Resume Preferences</h2>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Page Limit
-            </label>
-            <div className="flex gap-2">
-              {[1, 2].map((p) => (
-                <button
-                  key={p}
-                  onClick={() => updateConfig({ pageCount: p })}
-                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all border ${
-                    config.pageCount === p
-                      ? "bg-brand-600 text-white border-brand-600"
-                      : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
-                  }`}
-                >
-                  {p} page{p !== 1 ? "s" : ""}
-                </button>
-              ))}
+        {/* ── Edit Master Resume ─────────────────────────────────────────── */}
+        <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold text-gray-800">Master Resume</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                This is your source of truth. Edits here are saved to{" "}
+                <span className="font-mono">~/.resume-editor/master_resume.json</span>
+              </p>
             </div>
+            {resumeDirty && (
+              <span className="text-xs text-amber-600 font-medium bg-amber-50 px-2 py-0.5 rounded-full">
+                Unsaved changes
+              </span>
+            )}
           </div>
 
+          {displaySections ? (
+            <>
+              <ResumeEditor
+                sections={displaySections}
+                originalSections={masterResume}
+                onSectionChange={handleSectionChange}
+                onReaskSection={handleReaskSection}
+                onResetSection={handleResetSection}
+                label="Master Resume Sections"
+                showReask={true}
+              />
+
+              {/* Sync error */}
+              {syncError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  {syncError}
+                </div>
+              )}
+
+              {/* Suggestions panel */}
+              {suggestions !== null && (
+                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-gray-700">
+                      Quality Check
+                      {suggestions.length > 0
+                        ? ` — ${suggestions.length} suggestion${suggestions.length !== 1 ? "s" : ""}`
+                        : " — No issues found"}
+                    </span>
+                    {suggestions.length === 0 && (
+                      <span className="text-xs text-green-600 font-medium">✓ Saved</span>
+                    )}
+                  </div>
+
+                  {suggestions.length > 0 && (
+                    <div className="divide-y divide-gray-100">
+                      {suggestions.map((s, i) => {
+                        const style = SUGGESTION_STYLES[s.type] || SUGGESTION_STYLES.info;
+                        return (
+                          <div key={i} className={`px-4 py-3 flex gap-3 items-start ${style.bg}`}>
+                            <span className={`text-xs font-semibold px-1.5 py-0.5 rounded capitalize shrink-0 mt-0.5 ${style.badge}`}>
+                              {s.type}
+                            </span>
+                            <div>
+                              <span className="text-xs font-medium text-gray-500 uppercase tracking-wide mr-2">
+                                {s.section}
+                              </span>
+                              <span className={`text-sm ${style.text}`}>{s.message}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {suggestions.length > 0 && (
+                    <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 flex gap-3 justify-end">
+                      <button
+                        onClick={() => setSuggestions(null)}
+                        className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100"
+                      >
+                        Keep Editing
+                      </button>
+                      <button
+                        onClick={saveResume}
+                        disabled={resumeSaving}
+                        className="px-4 py-1.5 text-sm bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 disabled:opacity-50"
+                      >
+                        {resumeSaving ? "Saving..." : "Save Anyway"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Save & Sync button */}
+              {suggestions === null && (
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleSyncAndSave}
+                    disabled={syncing || resumeSaving}
+                    className="px-5 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-50 transition-colors"
+                  >
+                    {syncing ? "Checking quality..." : resumeSaving ? "Saving..." : "Save & Sync Resume →"}
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-center py-8 text-sm text-gray-400">
+              No master resume found. Complete setup to extract your resume.
+            </div>
+          )}
+        </section>
+
+        {/* ── Writing Preferences ────────────────────────────────────────── */}
+        <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+          <h2 className="font-semibold text-gray-800">Writing Preferences</h2>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Writing Instructions
+              Instructions for the AI
             </label>
             <textarea
               rows={5}
-              value={config.userInstructions || ""}
+              placeholder={`Examples:\n- Never use "passionate" or "guru"\n- Always quantify achievements\n- Keep a formal, professional tone`}
+              value={(config?.userInstructions as string) || ""}
               onChange={(e) => updateConfig({ userInstructions: e.target.value })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm resize-none"
             />
@@ -148,7 +393,7 @@ export default function Settings() {
             <div className="flex gap-2">
               <input
                 type="text"
-                value={config.savePath || ""}
+                value={(config?.savePath as string) || "~/Documents/Resumes"}
                 onChange={(e) => updateConfig({ savePath: e.target.value })}
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono"
               />
@@ -160,7 +405,7 @@ export default function Settings() {
                     const selected = await open({ directory: true, multiple: false });
                     if (selected && typeof selected === "string") updateConfig({ savePath: selected });
                   } catch {
-                    // Not in Tauri context — user types path manually
+                    // Not in Tauri — user types manually
                   }
                 }}
                 className="px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-600 hover:bg-gray-50 whitespace-nowrap"
@@ -171,148 +416,70 @@ export default function Settings() {
           </div>
         </section>
 
-        {/* Resume Template */}
-        <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-3">
-          <h2 className="font-semibold text-gray-800">Resume Template</h2>
-          <p className="text-xs text-gray-500">
-            The .docx or .tex file used as the formatting base for PDF export.
-          </p>
-
-          {config.templateName ? (
-            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-              <span className="text-sm text-gray-700 flex-1 font-medium truncate">{config.templateName}</span>
-              <label className="cursor-pointer text-xs text-brand-600 hover:underline whitespace-nowrap">
-                Replace
-                <input
-                  type="file"
-                  accept=".docx,.tex"
-                  className="hidden"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    const reader = new FileReader();
-                    reader.onload = () => updateConfig({
-                      templateName: file.name,
-                      templateContent: reader.result as string,
-                    });
-                    reader.readAsDataURL(file);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-            </div>
-          ) : (
-            <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-gray-200 rounded-lg cursor-pointer hover:border-gray-300 transition-colors">
-              <input
-                type="file"
-                accept=".docx,.tex"
-                className="hidden"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const reader = new FileReader();
-                  reader.onload = () => updateConfig({
-                    templateName: file.name,
-                    templateContent: reader.result as string,
-                  });
-                  reader.readAsDataURL(file);
-                  e.target.value = "";
-                }}
-              />
-              <p className="text-sm text-gray-400">No template — click to upload</p>
-              <p className="text-xs text-gray-400 mt-0.5">.docx · .tex</p>
-            </label>
-          )}
-        </section>
-
-        {/* Research File */}
-        <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-3">
-          <h2 className="font-semibold text-gray-800">Research File</h2>
-          <p className="text-xs text-gray-500">
-            Background research about you (e.g. an LLM-generated profile). Sent to the AI on every edit to provide extra context.
-          </p>
-
-          {config.researchName ? (
-            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-              <span className="text-sm text-gray-700 flex-1 font-medium truncate">{config.researchName}</span>
-              <label className="cursor-pointer text-xs text-brand-600 hover:underline whitespace-nowrap">
-                Replace
-                <input
-                  type="file"
-                  accept=".txt,.docx,.pdf,.md"
-                  className="hidden"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    const reader = new FileReader();
-                    reader.onload = () => updateConfig({
-                      researchName: file.name,
-                      researchContent: reader.result as string,
-                    });
-                    reader.readAsDataURL(file);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-              <button
-                onClick={() => updateConfig({ researchName: "", researchContent: "" })}
-                className="text-xs text-red-500 hover:underline whitespace-nowrap"
-              >
-                Remove
-              </button>
-            </div>
-          ) : (
-            <label className="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-gray-200 rounded-lg cursor-pointer hover:border-gray-300 transition-colors">
-              <input
-                type="file"
-                accept=".txt,.docx,.pdf,.md"
-                className="hidden"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const reader = new FileReader();
-                  reader.onload = () => updateConfig({
-                    researchName: file.name,
-                    researchContent: reader.result as string,
-                  });
-                  reader.readAsDataURL(file);
-                  e.target.value = "";
-                }}
-              />
-              <p className="text-sm text-gray-400">No research file — click to upload</p>
-              <p className="text-xs text-gray-400 mt-0.5">.txt · .md · .docx · .pdf</p>
-            </label>
-          )}
-        </section>
-
-        {/* AI Model */}
-        <section className={`bg-white rounded-xl border p-6 space-y-4 ${config.modelTested ? "border-green-200" : "border-amber-200"}`}>
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-gray-800">AI Model Configuration</h2>
-            {config.modelTested ? (
-              <span className="text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded-full">✓ Verified</span>
-            ) : (
-              <span className="text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">Not tested — run Test Connection</span>
-            )}
-          </div>
+        {/* ── AI Model ───────────────────────────────────────────────────── */}
+        <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+          <h2 className="font-semibold text-gray-800">AI Model</h2>
           <ModelPicker
-            value={config.modelConfig}
+            value={config?.modelConfig as any}
             apiKey={apiKey}
             onChange={(mc) => updateConfig({ modelConfig: mc })}
             onApiKeyChange={handleApiKeyChange}
-            onTestSuccess={handleTestSuccess}
           />
         </section>
 
-        {/* Danger zone */}
+        {/* ── Current Layout ─────────────────────────────────────────────── */}
+        {config?.template && (
+          <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-gray-800">Resume Layout</h2>
+              <button
+                onClick={() => navigate("/setup")}
+                className="text-xs text-brand-600 hover:underline"
+              >
+                Change via Setup →
+              </button>
+            </div>
+            <div className="flex gap-6 text-sm text-gray-600">
+              <div>
+                <span className="text-xs text-gray-400 block mb-0.5">Template</span>
+                <span className="font-medium capitalize">{config.template as string}</span>
+              </div>
+              <div>
+                <span className="text-xs text-gray-400 block mb-0.5">Role</span>
+                <span className="font-medium">{(config.role as string) || "—"}</span>
+              </div>
+              <div>
+                <span className="text-xs text-gray-400 block mb-0.5">Level</span>
+                <span className="font-medium capitalize">{(config.level as string) || "—"}</span>
+              </div>
+            </div>
+            {Array.isArray(config.sectionOrder) && (
+              <div>
+                <span className="text-xs text-gray-400 block mb-1">Section Order</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {(config.sectionOrder as string[]).map((s, i) => (
+                    <span key={s} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                      {i + 1}. {s}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* ── Danger Zone ────────────────────────────────────────────────── */}
         <section className="bg-white rounded-xl border border-red-100 p-6">
           <h2 className="font-semibold text-red-700 mb-3">Danger Zone</h2>
           <button
             onClick={handleReset}
             className="px-4 py-2 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm font-medium hover:bg-red-100"
           >
-            Reset App & Redo Setup
+            Reset App &amp; Redo Setup
           </button>
+          <p className="text-xs text-gray-400 mt-2">
+            Clears config and master resume. Your exported PDFs are not affected.
+          </p>
         </section>
       </div>
     </div>

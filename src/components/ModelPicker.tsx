@@ -34,11 +34,13 @@ const PROVIDERS: Array<{
       {
         key: "model",
         label: "Model",
-        placeholder: "gemini-2.5-flash",
+        placeholder: "gemini-3-flash",
         options: [
-          { value: "gemini-2.5-flash", label: "gemini-2.5-flash", note: "Best reasoning · ~10 RPM / 250 RPD" },
-          { value: "gemini-2.5-flash-lite-preview-06-17", label: "gemini-2.5-flash-lite-preview-06-17", note: "Fastest & cheapest · ~30 RPM / 1,500 RPD" },
-          { value: "gemini-1.5-flash", label: "gemini-1.5-flash", note: "Max free quota · ~15 RPM / 1,500 RPD" },
+          { value: "gemini-2.5-flash",            label: "gemini-2.5-flash",            note: "Recommended — fast, stable" },
+          { value: "gemini-3-flash-preview",       label: "gemini-3-flash-preview",       note: "Latest flash — fast, general use" },
+          { value: "gemini-3.1-pro-preview",       label: "gemini-3.1-pro-preview",       note: "Best quality — complex reasoning & coding" },
+          { value: "gemini-3.1-flash-lite-preview",label: "gemini-3.1-flash-lite-preview",note: "Fastest — low-latency, high-volume" },
+          { value: "gemma-4-31b-it",               label: "gemma-4-31b-it",               note: "Open-weight model" },
         ],
       },
     ],

@@ -1,0 +1,157 @@
+{
+  "basics": {
+    "name": "Kalyaan Kanugula",
+    "email": "kalyaankanugula@gmail.com",
+    "phone": "+1 (530) 321-0134",
+    "location": "Chico, CA",
+    "linkedin": "linkedin.com/in/kkalyaan",
+    "github": "",
+    "portfolio": ""
+  },
+  "summary": "Software Engineer with an MS in Computer Science and hands-on experience building and monitoring distributed backend systems within globally deployed, high-availability infrastructure at Amazon. Proficient in Python, Java, and C++ with a strong foundation in observability, system diagnostics, and reliability engineering. Experienced designing and implementing automation frameworks that detect anomalies before production rollout and restore system availability at scale.",
+  "experience": [
+    {
+      "company": "California State University",
+      "title": "Research Assistant",
+      "location": "Chico, USA",
+      "startDate": "September 2025",
+      "endDate": "Present",
+      "bullets": [
+        "Designed and shipped a self-improving 4-agent LLM system end-to-end using Claude API and GLM 4.6, owning technical design, implementation, benchmarking, and observability infrastructure independently.",
+        "Built observability and diagnostics infrastructure for a distributed multi-agent system, tracking per-turn logs, token costs, and agent diffs across 15+ configurable parameters using a SQLite-backed logging layer, measured against throughput and latency SLAs."
+      ]
+    },
+    {
+      "company": "Amazon",
+      "title": "Pricing Systems Engineer",
+      "location": "Bangalore, India",
+      "startDate": "December 2020",
+      "endDate": "July 2023",
+      "bullets": [
+        "Monitored globally deployed pricing services serving millions of daily transactions, acting as DRI to detect degradation and restore 99.9% system availability by diagnosing root causes in Java microservice behavior and distributed system logs.",
+        "Reduced manual data validation effort by 95% by building Python ETL pipelines from scratch to ingest, transform, and reformat raw CSV data from upstream pricing systems into formats consumable by dashboards and analytical tools.",
+        "Maintained 90% system availability during pre-production cycles by executing large-scale simulation runs, triaging failures, and recommending corrective actions before production rollout following established playbooks.",
+        "Improved system reliability and reduced operational toil by migrating legacy pricing workflows to a serverless AWS architecture using Lambda, S3, and Athena, cutting release cycles from 2 days to 2 hours.",
+        "Partnered closely with business stakeholders and senior engineers in an Agile environment to translate operational pricing requirements into reliable backend solutions, raising team code quality scores from 4.5 to 4.95."
+      ]
+    },
+    {
+      "company": "Amazon",
+      "title": "ML Analyst",
+      "location": "Hyderabad, India",
+      "startDate": "October 2019",
+      "endDate": "June 2020",
+      "bullets": [
+        "Improved ML model accuracy by 12% and boosted data throughput by 30% by tuning hyperparameters and automating dataset quality validation pipelines in Python.",
+        "Increased annotation throughput by 18% by streamlining labeling SOPs without compromising model accuracy."
+      ]
+    }
+  ],
+  "education": [
+    {
+      "institution": "California State University, Chico",
+      "degree": "Master of Science",
+      "field": "Computer Science",
+      "startDate": "",
+      "endDate": "August 2025",
+      "gpa": "",
+      "honors": [],
+      "location": "Chico, CA"
+    },
+    {
+      "institution": "Jawaharlal Nehru Technological University",
+      "degree": "Bachelor of Science",
+      "field": "Computer Science",
+      "startDate": "",
+      "endDate": "May 2019",
+      "gpa": "",
+      "honors": [],
+      "location": "Hyderabad"
+    }
+  ],
+  "skills": [
+    {
+      "category": "Programming",
+      "items": [
+        "Java",
+        "Go (GoLang)",
+        "Python",
+        "C++",
+        "Object-Oriented Programming"
+      ]
+    },
+    {
+      "category": "Frameworks",
+      "items": [
+        "Spring Boot",
+        "FastAPI",
+        "REST APIs",
+        "gRPC",
+        "GraphQL"
+      ]
+    },
+    {
+      "category": "Tools",
+      "items": [
+        "Git",
+        "Maven",
+        "Docker",
+        "Kubernetes",
+        "TDD",
+        "CI/CD",
+        "Linux",
+        "Monitoring",
+        "Observability"
+      ]
+    },
+    {
+      "category": "Cloud",
+      "items": [
+        "AWS (Lambda, S3, Athena, EC2, SQS, ECR)"
+      ]
+    },
+    {
+      "category": "Databases",
+      "items": [
+        "PostgreSQL",
+        "Redis",
+        "SimpleDB",
+        "DynamoDB"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "GitLab Open Source Contributions",
+      "startDate": "February 2025",
+      "endDate": "Present",
+      "bullets": [
+        "Contributed production-quality Go code to the go-gitlab open source client, implementing Direct Transfer API support in bulk_imports.go with full unit test coverage and exposed show_default_award_emoji in the GitLab Ruby API, MR approved pending final merge."
+      ],
+      "link": ""
+    },
+    {
+      "name": "Cloud and Edge Face Recognition Platform",
+      "startDate": "January 2025",
+      "endDate": "May 2025",
+      "bullets": [
+        "Built distributed AI inference platform sustaining 1,000 concurrent requests under 300ms latency using Docker containerization and auto-scaling across AWS EC2, S3, SQS, and Lambda."
+      ],
+      "link": ""
+    },
+    {
+      "name": "Performance Benchmarking of REST vs GraphQL APIs",
+      "startDate": "January 2025",
+      "endDate": "May 2025",
+      "bullets": [
+        "Architected and benchmarked REST and GraphQL APIs sustaining 10,000 req/sec with 40% P95 latency reduction over a 2.3M-row dataset using cursor-based pagination and rigorous code review."
+      ],
+      "link": ""
+    }
+  ],
+  "certifications": [],
+  "publications": [],
+  "awards": [],
+  "volunteer": [],
+  "languages": []
+}

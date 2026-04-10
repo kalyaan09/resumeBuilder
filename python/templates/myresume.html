@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page {
+    size: A4;
+    margin: 0;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+    font-size: 10.5pt;
+    color: #000;
+    line-height: 1.25;
+    padding: 1.2cm;
+    background: #fff;
+  }
+
+  a { color: #000; text-decoration: none; }
+
+  /* ── HEADER ─────────────────────────────── */
+  .header {
+    text-align: center;
+    margin-bottom: 5pt;
+  }
+
+  .header-name {
+    font-size: 22pt;
+    font-weight: bold;
+    line-height: 1.1;
+  }
+
+  .header-contact {
+    font-size: 9.5pt;
+    margin-top: 3pt;
+    line-height: 1.5;
+  }
+
+  /* ── SECTION TITLE ──────────────────────── */
+  /*
+   * Matches: \titleformat{\section}{\Large\scshape\raggedright}{}{}{}[\titlerule]
+   * with \titlespacing{0pt}{5pt}{5pt}
+   */
+  .section {
+    margin-bottom: 3pt;
+  }
+
+  .section-title {
+    font-size: 12.5pt;
+    font-variant: small-caps;
+    font-weight: normal;
+    text-align: left;
+    border-bottom: 1px solid #000;
+    padding-bottom: 1pt;
+    margin-top: 8pt;
+    margin-bottom: 5pt;
+    letter-spacing: 0.3px;
+  }
+
+  /* ── SUMMARY ────────────────────────────── */
+  .summary-text {
+    font-size: 10pt;
+    line-height: 1.4;
+    text-align: justify;
+  }
+
+  /* ── SKILLS TABLE ───────────────────────── */
+  /*
+   * Matches: \begin{tabularx}{\linewidth}{@{}l X@{}}
+   * Bold label left, items right, 2pt row gap
+   */
+  .skills-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10pt;
+  }
+
+  .skills-table td {
+    vertical-align: top;
+    padding: 1pt 0;
+  }
+
+  .skills-table td:first-child {
+    font-weight: bold;
+    white-space: nowrap;
+    padding-right: 12pt;
+    width: 1%;
+  }
+
+  /* ── EDUCATION ──────────────────────────── */
+  /*
+   * Matches:
+   *   \textbf{Institution} \hfill Date \\
+   *   Degree
+   */
+  .edu-entry {
+    margin-bottom: 5pt;
+  }
+
+  .edu-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6pt;
+  }
+
+  .edu-row-left  { font-weight: bold; font-size: 10.5pt; flex: 1; }
+  .edu-row-right { font-size: 10pt; white-space: nowrap; flex-shrink: 0; }
+
+  .edu-degree {
+    font-size: 10pt;
+    margin-top: 1pt;
+  }
+
+  /* ── EXPERIENCE & PROJECTS (joblong) ────── */
+  /*
+   * Matches the custom joblong environment:
+   *   \begin{tabularx}{\linewidth}{@{}l X r@{}}
+   *   \textbf{Title | Company, Location} & & Date \\
+   *   \end{tabularx}
+   *   \vspace{-15pt}
+   *   \begin{itemize}[nosep, leftmargin=1em, itemsep=3pt, label=$\bullet$]
+   */
+  .joblong-entry {
+    margin-bottom: 6pt;
+  }
+
+  .joblong-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6pt;
+    margin-bottom: 2pt;
+  }
+
+  .joblong-left  { font-weight: bold; font-size: 10.5pt; flex: 1; }
+  .joblong-right { font-size: 10pt; white-space: nowrap; flex-shrink: 0; font-style: normal; }
+
+  /* ── BULLETS ────────────────────────────── */
+  .bullets {
+    list-style-type: disc;
+    padding-left: 14pt;
+    margin-top: 0;
+  }
+
+  .bullets li {
+    font-size: 10pt;
+    line-height: 1.3;
+    margin-bottom: 3pt;
+  }
+
+  /* ── CERTIFICATIONS ─────────────────────── */
+  .cert-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10pt;
+    margin-bottom: 2pt;
+  }
+
+  /* ── PUBLICATIONS ───────────────────────── */
+  .pub-entry {
+    margin-bottom: 5pt;
+  }
+
+  .pub-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 6pt;
+  }
+
+  .pub-row-left  { font-weight: bold; font-size: 10pt; flex: 1; }
+  .pub-row-right { font-size: 10pt; white-space: nowrap; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<!-- ══ HEADER ══════════════════════════════════════════════════════════ -->
+<div class="header">
+  <div class="header-name">{{ resume.basics.name }}</div>
+  <div class="header-contact">
+    {% set parts = [] %}
+    {% if resume.basics.location %}{% set _ = parts.append(resume.basics.location) %}{% endif %}
+    {% if resume.basics.phone %}{% set _ = parts.append(resume.basics.phone) %}{% endif %}
+    {% if resume.basics.email %}{% set _ = parts.append('<a href="mailto:' ~ resume.basics.email ~ '">' ~ resume.basics.email ~ '</a>') %}{% endif %}
+    {% if resume.basics.linkedin %}{% set _ = parts.append('<a href="' ~ resume.basics.linkedin ~ '">' ~ resume.basics.linkedin ~ '</a>') %}{% endif %}
+    {% if resume.basics.github %}{% set _ = parts.append('<a href="' ~ resume.basics.github ~ '">' ~ resume.basics.github ~ '</a>') %}{% endif %}
+    {% if resume.basics.portfolio %}{% set _ = parts.append('<a href="' ~ resume.basics.portfolio ~ '">' ~ resume.basics.portfolio ~ '</a>') %}{% endif %}
+    {{ parts | join(' &nbsp;|&nbsp; ') }}
+  </div>
+</div>
+
+<!-- ══ SECTIONS ════════════════════════════════════════════════════════ -->
+{% for section_name in meta.sectionOrder %}
+{% if section_name in meta.activeSections %}
+
+  {# ── SUMMARY ── #}
+  {% if section_name == 'summary' and resume.summary %}
+  <div class="section">
+    <div class="section-title">Summary</div>
+    <p class="summary-text">{{ resume.summary }}</p>
+  </div>
+
+  {# ── SKILLS ── #}
+  {% elif section_name == 'skills' and resume.skills %}
+  <div class="section">
+    <div class="section-title">Technical Skills</div>
+    <table class="skills-table">
+      {% for skill in resume.skills %}
+      <tr>
+        <td>{{ skill.category }}</td>
+        <td>{{ skill['items'] | join(', ') }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  {# ── EDUCATION ── #}
+  {% elif section_name == 'education' and resume.education %}
+  <div class="section">
+    <div class="section-title">Education</div>
+    {% for edu in resume.education %}
+    <div class="edu-entry">
+      <div class="edu-row">
+        <span class="edu-row-left">{{ edu.institution }}</span>
+        <span class="edu-row-right">
+          {%- if edu.startDate %}{{ edu.startDate }} -- {% endif %}{{ edu.endDate -}}
+        </span>
+      </div>
+      <div class="edu-degree">
+        {{ edu.degree }}{% if edu.field %} of {{ edu.field }}{% endif %}{% if edu.gpa %} &nbsp;&mdash;&nbsp; GPA: {{ edu.gpa }}{% endif %}
+      </div>
+      {% if edu.honors %}
+      <ul class="bullets" style="margin-top:2pt;">
+        {% for h in edu.honors %}<li>{{ h }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── EXPERIENCE ── #}
+  {% elif section_name == 'experience' and resume.experience %}
+  <div class="section">
+    <div class="section-title">Professional Experience</div>
+    {% for exp in resume.experience %}
+    <div class="joblong-entry">
+      <div class="joblong-row">
+        <span class="joblong-left">
+          {{ exp.title }} | {{ exp.company }}{% if exp.location %}, {{ exp.location }}{% endif %}
+        </span>
+        <span class="joblong-right">
+          {%- if exp.startDate %}{{ exp.startDate }}{% if exp.endDate %} &ndash; {{ exp.endDate }}{% endif %}{% endif -%}
+        </span>
+      </div>
+      {% if exp.bullets %}
+      <ul class="bullets">
+        {% for b in exp.bullets %}<li>{{ b }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── PROJECTS ── #}
+  {% elif section_name == 'projects' and resume.projects %}
+  <div class="section">
+    <div class="section-title">Projects</div>
+    {% for proj in resume.projects %}
+    <div class="joblong-entry">
+      <div class="joblong-row">
+        <span class="joblong-left">
+          {{ proj.name }}{% if proj.link %} &nbsp;| <a href="{{ proj.link }}" style="font-weight:normal;">{{ proj.link }}</a>{% endif %}
+        </span>
+        <span class="joblong-right">
+          {%- if proj.startDate %}{{ proj.startDate }}{% if proj.endDate %} &ndash; {{ proj.endDate }}{% endif %}{% endif -%}
+        </span>
+      </div>
+      {% if proj.bullets %}
+      <ul class="bullets">
+        {% for b in proj.bullets %}<li>{{ b }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── CERTIFICATIONS ── #}
+  {% elif section_name == 'certifications' and resume.certifications %}
+  <div class="section">
+    <div class="section-title">Certifications</div>
+    {% for cert in resume.certifications %}
+    <div class="cert-row">
+      <span><strong>{{ cert.name }}</strong>{% if cert.issuer %} &mdash; {{ cert.issuer }}{% endif %}</span>
+      <span>{{ cert.date | default('') }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── PUBLICATIONS ── #}
+  {% elif section_name == 'publications' and resume.publications %}
+  <div class="section">
+    <div class="section-title">Publications</div>
+    {% for pub in resume.publications %}
+    <div class="pub-entry">
+      <div class="pub-row">
+        <span class="pub-row-left">{{ pub.title }}</span>
+        <span class="pub-row-right">{{ pub.date | default('') }}</span>
+      </div>
+      {% if pub.journal %}<div style="font-size:10pt; font-style:italic; margin-top:1pt;">{{ pub.journal }}</div>{% endif %}
+      {% if pub.link %}<div style="font-size:9.5pt; margin-top:1pt;"><a href="{{ pub.link }}">{{ pub.link }}</a></div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── AWARDS ── #}
+  {% elif section_name == 'awards' and resume.awards %}
+  <div class="section">
+    <div class="section-title">Awards</div>
+    <ul class="bullets">
+      {% for award in resume.awards %}<li>{{ award }}</li>{% endfor %}
+    </ul>
+  </div>
+
+  {# ── VOLUNTEER ── #}
+  {% elif section_name == 'volunteer' and resume.volunteer %}
+  <div class="section">
+    <div class="section-title">Volunteer</div>
+    <ul class="bullets">
+      {% for v in resume.volunteer %}<li>{{ v }}</li>{% endfor %}
+    </ul>
+  </div>
+
+  {# ── LANGUAGES ── #}
+  {% elif section_name == 'languages' and resume.languages %}
+  <div class="section">
+    <div class="section-title">Languages</div>
+    <p style="font-size:10pt;">{{ resume.languages | join(', ') }}</p>
+  </div>
+
+  {% endif %}
+
+{% endif %}
+{% endfor %}
+
+</body>
+</html>

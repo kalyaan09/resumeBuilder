@@ -7,6 +7,7 @@ interface SectionBlockProps {
   onChange: (content: any) => void;
   onReask: (feedback: string) => Promise<void>;
   onReset: () => void;
+  showReask?: boolean;
 }
 
 function formatKey(key: string): string {
@@ -101,6 +102,7 @@ export default function SectionBlock({
   onChange,
   onReask,
   onReset,
+  showReask = true,
 }: SectionBlockProps) {
   const [reaskOpen, setReaskOpen] = useState(false);
   const [reaskText, setReaskText] = useState("");
@@ -136,12 +138,14 @@ export default function SectionBlock({
               Reset
             </button>
           )}
-          <button
-            onClick={() => setReaskOpen(!reaskOpen)}
-            className="text-xs bg-brand-50 text-brand-700 hover:bg-brand-100 px-3 py-1 rounded-md font-medium"
-          >
-            Re-ask AI
-          </button>
+          {showReask && (
+            <button
+              onClick={() => setReaskOpen(!reaskOpen)}
+              className="text-xs bg-brand-50 text-brand-700 hover:bg-brand-100 px-3 py-1 rounded-md font-medium"
+            >
+              Re-ask AI
+            </button>
+          )}
         </div>
       </div>
 

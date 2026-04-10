@@ -8,6 +8,13 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "fs:default",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$HOME/.resume-editor" },
+        { "path": "$HOME/.resume-editor/**" }
+      ]
+    },
     "store:allow-get",
     "store:allow-set",
     "store:allow-save"

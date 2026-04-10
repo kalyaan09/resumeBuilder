@@ -3,8 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Setup from "./pages/Setup";
 import Editor from "./pages/Editor";
 import Settings from "./pages/Settings";
-
-const CONFIG_KEY = "resume_editor_config";
+import { readConfig } from "./lib/persistenceStore";
 
 function App() {
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
@@ -13,18 +12,14 @@ function App() {
   const [sidecarConnecting, setSidecarConnecting] = useState(true);
 
   useEffect(() => {
-    // Check if setup has been completed
-    const config = localStorage.getItem(CONFIG_KEY);
-    if (config) {
-      try {
-        const parsed = JSON.parse(config);
-        setSetupComplete(!!parsed.setupComplete);
-      } catch {
+    // Check if setup has been completed (reads ~/.resume-editor/config.json)
+    readConfig()
+      .then((config) => {
+        setSetupComplete(!!(config?.setupComplete));
+      })
+      .catch(() => {
         setSetupComplete(false);
-      }
-    } else {
-      setSetupComplete(false);
-    }
+      });
 
     // Check Python sidecar health
     checkSidecar();

@@ -21,12 +21,12 @@ import uvicorn
 import os
 import json
 import base64
-import tempfile
 from pathlib import Path
 
 from llm_client import LLMClient
-from docx_parser import parse_docx, parse_tex
-from pdf_exporter import export_to_pdf, export_to_tex
+from pdf_exporter import export_to_pdf
+from resume_extractor import extract_resume_to_json
+from presets import get_preset
 
 app = FastAPI(title="Resume Editor Sidecar")
 
@@ -38,23 +38,11 @@ app.add_middleware(
 )
 
 
-class ParseResumeRequest(BaseModel):
-    file_content: str  # base64 data URL
-    file_name: str
-
-
-class ParseResearchRequest(BaseModel):
-    file_content: str  # base64 data URL
-    file_name: str
-
-
 class EditResumeRequest(BaseModel):
     jd_text: str
-    resume_sections: dict
-    user_instructions: str
-    research_text: Optional[str] = ""  # plain extracted text, not base64
-    page_count: int = 1
-    target_role: Optional[str] = ""
+    master_resume: dict           # full JSON Resume schema
+    user_instructions: str = ""
+    research_text: str = ""
     llm_config: Optional[dict] = None
 
 
@@ -68,47 +56,38 @@ class ReaskSectionRequest(BaseModel):
 
 
 class ExportPdfRequest(BaseModel):
-    sections: dict
-    original_sections: Optional[dict] = None
-    template_content: Optional[str] = None
-    template_name: Optional[str] = None
-    save_path: str
+    resume: dict
+    template: str = "jake"
+    section_order: list = []
+    active_sections: list = []
+    save_path: str = "~/Documents/Resumes"
+
+
+class ExtractResumeRequest(BaseModel):
+    file_content: str   # base64 data URL
+    file_name: str
+    llm_config: Optional[dict] = None
+
+
+class ValidateTemplateRequest(BaseModel):
+    role: str
+    level: str
+    user_feedback: str = ""
+    current_template: Optional[str] = None
+    current_sections: Optional[list] = None
+    llm_config: Optional[dict] = None
+
+
+class SyncMasterResumeRequest(BaseModel):
+    resume_before: dict
+    resume_after: dict
+    role: str = ""
+    level: str = ""
+    llm_config: Optional[dict] = None
 
 
 class TestConnectionRequest(BaseModel):
     llm_config: Optional[dict] = None
-
-
-def _extract_research_text(content_b64: str, filename: str) -> str:
-    """Decode a base64 data URL research file and extract plain text."""
-    if not content_b64:
-        return ""
-    if not content_b64.startswith("data:"):
-        # Already plain text
-        return content_b64
-
-    b64 = content_b64.split(",", 1)[1] if "," in content_b64 else content_b64
-    file_bytes = base64.b64decode(b64)
-    ext = Path(filename).suffix.lower() if filename else ".txt"
-
-    if ext in (".txt", ".md"):
-        return file_bytes.decode("utf-8", errors="replace")
-    elif ext == ".docx":
-        from docx import Document
-        import io
-        doc = Document(io.BytesIO(file_bytes))
-        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-    elif ext == ".pdf":
-        try:
-            from pypdf import PdfReader
-            import io
-            reader = PdfReader(io.BytesIO(file_bytes))
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
-        except ImportError:
-            return "[PDF research file — install pypdf to enable text extraction]"
-    else:
-        # Best-effort UTF-8 decode
-        return file_bytes.decode("utf-8", errors="replace")
 
 
 @app.get("/health")
@@ -116,9 +95,16 @@ def health():
     return {"status": "ok", "service": "resume-editor-sidecar"}
 
 
-@app.post("/parse-resume")
-def parse_resume(req: ParseResumeRequest):
+@app.post("/extract-resume")
+def extract_resume(req: ExtractResumeRequest):
+    """
+    Accept a .tex, .docx, or .pdf resume file (base64 data URL),
+    extract its content using the LLM, and return a JSON Resume schema dict.
+    """
     try:
+        if not req.llm_config:
+            raise HTTPException(status_code=400, detail="No model configured")
+
         # Decode base64 data URL
         if "," in req.file_content:
             b64 = req.file_content.split(",", 1)[1]
@@ -127,35 +113,132 @@ def parse_resume(req: ParseResumeRequest):
         file_bytes = base64.b64decode(b64)
 
         ext = Path(req.file_name).suffix.lower()
+        if ext not in (".tex", ".docx", ".pdf"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type '{ext}'. Accepted: .tex, .docx, .pdf",
+            )
 
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-            tmp.write(file_bytes)
-            tmp_path = tmp.name
+        client = LLMClient.from_config(req.llm_config)
+        resume_json = extract_resume_to_json(file_bytes, ext, client)
 
-        try:
-            if ext == ".docx":
-                sections = parse_docx(tmp_path)
-            elif ext == ".tex":
-                sections = parse_tex(tmp_path)
-            else:
-                raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
-        finally:
-            os.unlink(tmp_path)
+        log.info("[extract-resume] extraction complete")
+        log.debug(f"[extract-resume] result:\n{json.dumps(resume_json, indent=2)}")
 
-        return {"sections": sections}
+        return {"resume": resume_json}
+
     except HTTPException:
         raise
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"LLM returned invalid JSON: {e}")
     except Exception as e:
+        log.exception("[extract-resume] error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/parse-research")
-def parse_research(req: ParseResearchRequest):
+_VALIDATE_SYSTEM = """You are a resume layout consultant. Recommend the best resume template and section order for the given role and experience level.
+
+Available templates:
+- jake: Clean, technical, single-column. Ideal for software engineers and technical IC roles.
+- sb2nov: Academic two-column date layout. Ideal for ML engineers, data scientists, researchers.
+- faangpath: Professional business style. Ideal for PMs, business analysts, TPMs.
+- myresume: Minimalist personal style. Works well for data analysts and mid-level professionals.
+
+Available sections: summary, experience, education, skills, projects, certifications, publications, awards, volunteer, languages
+
+Guidelines:
+- entry level: put education near the top; omit summary unless background is distinctive
+- mid/senior level: experience first (or summary then experience); education at the bottom
+- ML/research roles: include publications if relevant
+- PM/BA/TPM roles: include certifications
+- Keep section list lean — only sections that matter for the role
+
+Return ONLY valid JSON, no commentary:
+{"template": "template_name", "sections": ["s1", "s2", ...], "reason": "1-2 sentence explanation"}"""
+
+
+@app.post("/validate-template")
+def validate_template(req: ValidateTemplateRequest):
+    """
+    Use the preset table as a starting point, then let the LLM validate/adjust
+    based on role, level, and optional user feedback.
+    Returns {template, sections, reason}.
+    """
     try:
-        text = _extract_research_text(req.file_content, req.file_name)
-        return {"text": text}
+        if not req.llm_config:
+            raise HTTPException(status_code=400, detail="No model configured")
+
+        preset = get_preset(req.role, req.level)
+        suggested_template = req.current_template or preset["template"]
+        suggested_sections = req.current_sections or preset["sections"]
+
+        feedback_block = (
+            f"\nUser feedback: {req.user_feedback}" if req.user_feedback else ""
+        )
+
+        user_prompt = (
+            f"Role: {req.role}\n"
+            f"Level: {req.level}\n"
+            f"Preset suggestion: template={suggested_template}, sections={suggested_sections}"
+            f"{feedback_block}\n\n"
+            "Return the best template and sections as JSON."
+        )
+
+        client = LLMClient.from_config(req.llm_config)
+        raw = client.complete(_VALIDATE_SYSTEM, user_prompt, max_tokens=512)
+
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]
+            if "```" in raw:
+                raw = raw.rsplit("```", 1)[0]
+
+        result = json.loads(raw)
+
+        # Ensure required keys are present; fall back to preset if missing
+        template = result.get("template") or suggested_template
+        sections = result.get("sections") or suggested_sections
+        reason = result.get("reason") or "Best match for your role and experience level."
+
+        log.info(f"[validate-template] {req.role}/{req.level} → {template}, {sections}")
+
+        return {"template": template, "sections": sections, "reason": reason}
+
+    except HTTPException:
+        raise
+    except json.JSONDecodeError:
+        # LLM returned malformed JSON — fall back to preset
+        preset = get_preset(req.role, req.level)
+        return {
+            "template": preset["template"],
+            "sections": preset["sections"],
+            "reason": "Using default recommendation for your role and experience level.",
+        }
     except Exception as e:
+        log.exception("[validate-template] error")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_EDIT_RESUME_SYSTEM = """You are an expert resume writer with 15 years of experience helping candidates land jobs at top companies.
+
+You will receive:
+1. A job description
+2. A master resume in JSON Resume format
+3. User instructions and preferences
+4. Optional research notes about the candidate
+
+Your job is to tailor the resume content for this specific job description.
+
+STRICT RULES:
+- Return the EXACT same JSON structure — same keys, same types, same number of array items
+- Never add or remove bullet points from any list
+- Never invent experience, skills, or credentials the candidate does not have
+- Only rewrite existing text content to better match the job description
+- Prioritize keywords and phrases from the JD naturally throughout
+- Keep bullets achievement-focused with metrics wherever they already exist
+- Follow the user's personal instructions strictly
+- Plain text only — no markdown, no LaTeX, no special characters
+- Return valid JSON only, no commentary, no code fences"""
 
 
 @app.post("/edit-resume")
@@ -166,82 +249,33 @@ def edit_resume(req: EditResumeRequest):
 
         client = LLMClient.from_config(req.llm_config)
 
-        research_text = req.research_text or ""
-        page_descriptor = f"{req.page_count} page{'s' if req.page_count > 1 else ''}"
-        role_line = f" targeting a **{req.target_role}** role" if req.target_role else ""
+        user_prompt = (
+            f"Job Description:\n{req.jd_text}\n\n"
+            f"Master Resume (JSON):\n{json.dumps(req.master_resume, indent=2)}\n\n"
+            f"User Instructions:\n{req.user_instructions or 'None provided'}\n\n"
+            f"Research Notes:\n{req.research_text or 'None provided'}\n\n"
+            "Return the tailored resume as valid JSON with the exact same structure."
+        )
 
-        system_prompt = f"""You are an expert resume writer and career coach with 15 years of experience helping candidates land jobs at top companies.
+        raw = client.complete(_EDIT_RESUME_SYSTEM, user_prompt, max_tokens=8192)
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]
+            if "```" in raw:
+                raw = raw.rsplit("```", 1)[0]
 
-You will be given:
-1. A job description
-2. The user's current resume sections as JSON
-3. The user's personal instructions and preferences
-4. (Optional) Research notes about the user
+        log.info("[edit-resume] raw response length: %d chars", len(raw))
+        resume = json.loads(raw)
+        log.info("[edit-resume] parsed OK")
 
-Your job is to tailor the resume content{role_line} for this specific job description.
-
-CRITICAL — SURGICAL CONTENT REPLACEMENT ONLY:
-- Return the EXACT same JSON keys as the input. Do NOT add, remove, or rename any keys.
-- Preserve the EXACT same data type for every value (list stays list, string stays string, dict stays dict).
-- Keep the EXACT same number of items in every list — do NOT add or remove list entries.
-- Never change the number of bullet points. Never add sentences that did not exist. Never remove existing bullets. Only rewrite the text of each existing bullet point.
-- Only change the text content inside existing items (bullet text, summaries, skill lists, etc.).
-- Do NOT restructure, reorder, merge, or split any sections or list items.
-- This output is used for direct in-place substitution into the original template file. Any structural change WILL break the output formatting.
-- Return PLAIN TEXT only in all values — no LaTeX commands, no backslashes, no braces. The template already has all necessary formatting commands.
-
-CONTENT RULES:
-- Never invent experience, skills, or credentials the user does not have
-- Prioritize keywords and phrases from the JD naturally throughout
-- Keep bullet points achievement-focused with metrics where possible
-- Follow the user's personal instructions strictly
-- CRITICAL LENGTH CONSTRAINT: The final resume MUST fit within {page_descriptor} — be concise
-- Return ONLY valid JSON — no commentary, no markdown, no code fences
-- Do NOT add bullet markers ("- ", "• ", "* ") to list items — the template handles visual formatting"""
-
-        user_prompt = f"""Job Description:
-{req.jd_text}
-
-Current Resume Sections (JSON):
-{json.dumps(req.resume_sections, indent=2)}
-
-User Instructions:
-{req.user_instructions or 'None provided'}
-
-Research Notes:
-{research_text or 'None provided'}
-
-Return the edited resume sections as valid JSON only."""
-
-        result = client.complete(system_prompt, user_prompt)
-
-        # Strip markdown code fences if present
-        result = result.strip()
-        if result.startswith("```"):
-            result = result.split("\n", 1)[1]
-            if result.endswith("```"):
-                result = result.rsplit("```", 1)[0]
-
-        log.info("="*80)
-        log.info("EDIT-RESUME — RAW LLM RESPONSE")
-        log.info("="*80)
-        log.info(result)
-        log.info("="*80)
-
-        sections = json.loads(result)
-
-        log.info("EDIT-RESUME — PARSED SECTIONS JSON")
-        log.info("-"*80)
-        log.info(json.dumps(sections, indent=2))
-        log.info("-"*80)
-
-        return {"sections": sections}
+        return {"resume": resume}
 
     except HTTPException:
         raise
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"AI returned invalid JSON: {e}")
+        raise HTTPException(status_code=500, detail=f"LLM returned invalid JSON: {e}")
     except Exception as e:
+        log.exception("[edit-resume] error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -253,14 +287,14 @@ def reask_section(req: ReaskSectionRequest):
 
         client = LLMClient.from_config(req.llm_config)
 
-        system_prompt = """You are an expert resume writer. You will rewrite a specific section of a resume based on user feedback.
+        system_prompt = """You are an expert resume writer. Rewrite a specific resume section based on user feedback.
 
 Rules:
-- Return ONLY the rewritten content in the exact same JSON structure/type as the input
+- Return ONLY the rewritten content in the exact same JSON structure and type as the input
 - No commentary, no markdown, no code fences
-- Maintain achievement-focused, concise language
-- Incorporate the user's feedback precisely
-- Do NOT add bullet markers ("- ", "• ", "* ") to list items — return clean text only"""
+- Plain text values only — no bullet markers, no special characters
+- Keep language achievement-focused and concise
+- Incorporate the user's feedback precisely"""
 
         user_prompt = f"""Section: {req.section_key}
 
@@ -299,38 +333,83 @@ Return the rewritten section content as JSON only (same type/structure as input)
 @app.post("/export-pdf")
 def export_pdf(req: ExportPdfRequest):
     try:
-        # Ensure save directory exists (expand ~ to actual home dir)
         save_dir = Path(os.path.expanduser(req.save_path))
         save_dir.mkdir(parents=True, exist_ok=True)
 
         file_path = export_to_pdf(
-            sections=req.sections,
-            original_sections=req.original_sections,
-            template_content=req.template_content,
-            template_name=req.template_name,
+            resume=req.resume,
+            template=req.template,
+            section_order=req.section_order,
+            active_sections=req.active_sections,
             save_dir=str(save_dir),
         )
 
+        log.info("[export-pdf] saved to %s", file_path)
         return {"success": True, "file_path": file_path}
     except Exception as e:
+        log.exception("[export-pdf] error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/export-tex")
-def export_tex(req: ExportPdfRequest):
-    try:
-        save_dir = Path(os.path.expanduser(req.save_path))
-        save_dir.mkdir(parents=True, exist_ok=True)
+_SYNC_RESUME_SYSTEM = """You are a resume quality reviewer. A user has edited their master resume. Review the updated content and identify any issues.
 
-        orig_path, edit_path = export_to_tex(
-            sections=req.sections,
-            original_sections=req.original_sections,
-            template_content=req.template_content,
-            save_dir=str(save_dir),
+Check for:
+- Weak action verbs or vague language ("responsible for", "helped with", "worked on")
+- Bullets that start with "I" instead of an action verb
+- Missing metrics where a number would strengthen the point
+- Skills mentioned in bullets but absent from the skills section
+- Empty or near-empty sections
+- Any content that looks truncated or corrupted
+
+Return a JSON array of findings. If everything looks good, return an empty array [].
+
+Format: [{"section": "section_name", "type": "error|warning|info", "message": "specific, actionable feedback"}]
+- "error": data corruption or empty required fields
+- "warning": quality issue worth addressing
+- "info": minor suggestion or positive observation
+
+Return ONLY the JSON array, no commentary, no code fences."""
+
+
+@app.post("/sync-master-resume")
+def sync_master_resume(req: SyncMasterResumeRequest):
+    """
+    Review the edited master resume for quality issues and structural problems.
+    Returns a list of suggestions the user can accept or ignore before saving.
+    """
+    try:
+        if not req.llm_config:
+            raise HTTPException(status_code=400, detail="No model configured")
+
+        role_line = f"Role: {req.role}\nLevel: {req.level}\n\n" if req.role else ""
+
+        user_prompt = (
+            f"{role_line}"
+            f"Updated Resume (JSON):\n{json.dumps(req.resume_after, indent=2)}\n\n"
+            "Return your findings as a JSON array (empty array if no issues)."
         )
 
-        return {"success": True, "original_path": orig_path, "edited_path": edit_path}
+        client = LLMClient.from_config(req.llm_config)
+        raw = client.complete(_SYNC_RESUME_SYSTEM, user_prompt, max_tokens=1024)
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]
+            if "```" in raw:
+                raw = raw.rsplit("```", 1)[0]
+
+        suggestions = json.loads(raw)
+        if not isinstance(suggestions, list):
+            suggestions = []
+
+        log.info("[sync-master-resume] %d suggestion(s)", len(suggestions))
+        return {"suggestions": suggestions}
+
+    except HTTPException:
+        raise
+    except json.JSONDecodeError:
+        return {"suggestions": []}
     except Exception as e:
+        log.exception("[sync-master-resume] error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
