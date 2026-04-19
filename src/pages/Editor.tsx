@@ -1,13 +1,100 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import ResumeEditor from "../components/ResumeEditor";
+import AppSidebar from "../components/AppSidebar";
 import { getApiKey } from "../lib/secureStore";
-import { readConfig, readResume } from "../lib/persistenceStore";
+import { readConfig, readResume, writeConfig } from "../lib/persistenceStore";
+import { Button, Modal, SegmentedControl, Surface } from "../ui";
 
 const SIDECAR = "http://localhost:8000";
+const FONT_SIZES = [9, 9.5, 10, 10.5, 11];
 
-// Returns an ordered subset of the resume keyed by activeSections.
-// `basics` is always excluded — it's rendered in the template header, not the editor.
+const SAMPLE_RESUME = {
+  basics: {
+    name: "Alex Johnson",
+    email: "alex.johnson@email.com",
+    phone: "(555) 867-5309",
+    location: "San Francisco, CA",
+    linkedin: "linkedin.com/in/alexjohnson",
+    github: "github.com/alexjohnson",
+    portfolio: "alexjohnson.dev",
+  },
+  summary:
+    "Software Engineer with 4 years of experience building scalable distributed systems " +
+    "and data pipelines. Passionate about developer tooling, ML infrastructure, and " +
+    "open-source contributions. Led cross-functional teams shipping features used by millions.",
+  experience: [
+    {
+      company: "Stripe",
+      title: "Software Engineer II",
+      location: "San Francisco, CA",
+      startDate: "June 2022",
+      endDate: "Present",
+      bullets: [
+        "Designed and shipped a real-time fraud detection pipeline processing 50K transactions/sec, reducing chargebacks by 23% ($4M/year saved).",
+        "Led migration of legacy monolith services to Kubernetes microservices, cutting p99 latency from 800ms to 120ms.",
+        "Mentored 3 junior engineers and conducted 60+ technical interviews, improving team hiring bar.",
+      ],
+    },
+    {
+      company: "Amazon Web Services",
+      title: "Software Development Engineer",
+      location: "Seattle, WA",
+      startDate: "July 2020",
+      endDate: "May 2022",
+      bullets: [
+        "Built an internal A/B testing framework adopted by 15 teams, enabling 200+ concurrent experiments.",
+        "Optimized DynamoDB query patterns reducing read costs by 40% across 3 high-traffic services.",
+        "Implemented CI/CD pipelines using CodePipeline and CloudFormation, cutting deploy time from 45 min to 8 min.",
+      ],
+    },
+  ],
+  education: [
+    {
+      institution: "University of California, Berkeley",
+      degree: "Bachelor of Science",
+      field: "Electrical Engineering & Computer Science",
+      endDate: "May 2020",
+      gpa: "3.8",
+    },
+  ],
+  skills: [
+    { category: "Languages", items: ["Python", "Go", "Java", "TypeScript", "SQL"] },
+    { category: "Frameworks", items: ["FastAPI", "React", "gRPC", "Kafka", "Spark"] },
+    { category: "Cloud & DevOps", items: ["AWS", "GCP", "Kubernetes", "Terraform", "Docker"] },
+    { category: "Databases", items: ["PostgreSQL", "DynamoDB", "Redis", "BigQuery"] },
+  ],
+  projects: [
+    {
+      name: "OpenTelemetry Contrib — Kafka Receiver",
+      startDate: "Jan 2023",
+      endDate: "Present",
+      bullets: [
+        "Authored Kafka metrics receiver merged into the official OTel Collector contrib repo (500+ GitHub stars).",
+        "Reduced instrumentation boilerplate for Kafka consumers from 200 lines to a single config block.",
+      ],
+    },
+    {
+      name: "ResumeCraft — AI Resume Tailoring Tool",
+      startDate: "Aug 2023",
+      endDate: "Dec 2023",
+      bullets: [
+        "Built a local-first Tauri + FastAPI desktop app that uses LLMs to tailor resumes to job descriptions.",
+        "Integrated Playwright PDF export with 4 professional templates; used by 1,200+ job seekers.",
+      ],
+    },
+  ],
+  certifications: [
+    { name: "AWS Certified Solutions Architect – Professional", issuer: "Amazon", date: "2022" },
+    { name: "Google Cloud Professional Data Engineer", issuer: "Google", date: "2023" },
+  ],
+  publications: [],
+  awards: [],
+  volunteer: [],
+  languages: [],
+};
+
 function filterSections(
   resume: Record<string, unknown>,
   sectionOrder: string[],
@@ -25,33 +112,34 @@ function filterSections(
 export default function Editor() {
   const navigate = useNavigate();
 
-  // Persistent data
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [masterResume, setMasterResume] = useState<Record<string, unknown> | null>(null);
-
-  // Display slices (filtered + ordered)
   const [masterSections, setMasterSections] = useState<Record<string, unknown> | null>(null);
   const [editedSections, setEditedSections] = useState<Record<string, unknown> | null>(null);
-
-  // Full edited JSON Resume (needed for re-ask and export)
   const [editedResume, setEditedResume] = useState<Record<string, unknown> | null>(null);
 
-  // UI state
   const [jdText, setJdText] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
   const [lastExportPath, setLastExportPath] = useState<string | null>(null);
-  const [jdCollapsed, setJdCollapsed] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
 
-  // ── Load config + master resume from disk ──────────────────────────────────
+  const [fontSize, setFontSize] = useState<number>(10);
+  const [defaultFontSize, setDefaultFontSize] = useState<number>(10);
+  const [fontSizeManual, setFontSizeManual] = useState(false);
+  const [fontSizeDialog, setFontSizeDialog] = useState(false);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [overflowWarning, setOverflowWarning] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([readConfig(), readResume()])
       .then(([cfg, resume]) => {
         setConfig(cfg);
+        const dfSize = (cfg?.defaultFontSize as number) || 10;
+        setDefaultFontSize(dfSize);
+        setFontSize(dfSize);
         setMasterResume(resume);
 
         if (cfg && resume) {
@@ -63,7 +151,6 @@ export default function Editor() {
       .finally(() => setDataLoading(false));
   }, []);
 
-  // Recompute editedSections whenever editedResume or config changes
   useEffect(() => {
     if (!editedResume || !config) return;
     const order = (config.sectionOrder as string[]) || Object.keys(editedResume);
@@ -71,7 +158,50 @@ export default function Editor() {
     setEditedSections(filterSections(editedResume, order, active));
   }, [editedResume, config]);
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!editedResume || !config) return;
+    let cancelled = false;
+    setPreviewLoading(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`${SIDECAR}/preview-pdf`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            resume: editedResume,
+            template: (config.template as string) || "jake",
+            section_order: (config.sectionOrder as string[]) || [],
+            active_sections: (config.activeSections as string[]) || [],
+            font_size: fontSize,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || "preview-pdf failed");
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        if (typeof data.overflow_warning === "string" && data.overflow_warning) {
+          setOverflowWarning(data.overflow_warning);
+        } else {
+          setOverflowWarning(null);
+        }
+        const url = `${SIDECAR}/preview-pdf-file?v=${Date.now()}#toolbar=1&navpanes=0&scrollbar=0`;
+        setPreviewSrc(url);
+      } catch (err) {
+        console.error("[preview-pdf]", err);
+        if (!cancelled) setOverflowWarning(null);
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [editedResume, fontSize, config]);
 
   async function fullLlmConfig() {
     const base = (config?.modelConfig as Record<string, string>) || {};
@@ -79,18 +209,10 @@ export default function Editor() {
     return { ...base, api_key };
   }
 
-  function showToast(msg: string) {
-    setToast(msg);
-    setTimeout(() => setToast(null), 6000);
-  }
-
-  // ── Edit ───────────────────────────────────────────────────────────────────
-
   async function handleEdit() {
     if (!jdText.trim() || !masterResume) return;
     setLoading(true);
     setError(null);
-    setJdCollapsed(true);
 
     try {
       const res = await fetch(`${SIDECAR}/edit-resume`, {
@@ -112,14 +234,12 @@ export default function Editor() {
 
       const data = await res.json();
       setEditedResume(data.resume);
-    } catch (e: any) {
-      setError(e.message || "Failed to edit resume");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to edit resume");
     } finally {
       setLoading(false);
     }
   }
-
-  // ── Section editing ────────────────────────────────────────────────────────
 
   function handleSectionChange(key: string, newContent: unknown) {
     setEditedResume((prev) => (prev ? { ...prev, [key]: newContent } : prev));
@@ -154,14 +274,10 @@ export default function Editor() {
     setEditedResume((prev) => (prev ? { ...prev, [key]: data.content } : prev));
   }
 
-  // ── Export PDF ─────────────────────────────────────────────────────────────
-  // Calls the /export-pdf shape that will be implemented in step 5 (Puppeteer).
-
-  async function handleExport() {
-    if (!editedResume) return;
+  async function doExport(sizeToUse: number) {
+    if (!editedResume || !config) return;
     setExportLoading(true);
     setError(null);
-
     try {
       const res = await fetch(`${SIDECAR}/export-pdf`, {
         method: "POST",
@@ -169,9 +285,11 @@ export default function Editor() {
         body: JSON.stringify({
           resume: editedResume,
           template: (config?.template as string) || "jake",
-          section_order: (config?.sectionOrder as string[]) || [],
-          active_sections: (config?.activeSections as string[]) || [],
+          section_order: (config.sectionOrder as string[]) || [],
+          active_sections: (config.activeSections as string[]) || [],
           save_path: (config?.savePath as string) || "~/Documents/Resumes",
+          font_size: sizeToUse,
+          auto_fit: !fontSizeManual,
         }),
       });
 
@@ -182,12 +300,44 @@ export default function Editor() {
 
       const data = await res.json();
       setLastExportPath(data.file_path);
-      showToast(`Saved to ${data.file_path}`);
-    } catch (e: any) {
-      setError(e.message || "Export failed");
+
+      if (typeof data.font_size === "number" && data.font_size !== fontSize) {
+        setFontSize(data.font_size);
+      }
+      if (typeof data.overflow_warning === "string" && data.overflow_warning) {
+        setOverflowWarning(data.overflow_warning);
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Export failed");
     } finally {
       setExportLoading(false);
     }
+  }
+
+  function handleExportClick() {
+    if (!editedResume) return;
+    if (fontSizeManual && fontSize !== defaultFontSize) {
+      setFontSizeDialog(true);
+    } else {
+      doExport(fontSize);
+    }
+  }
+
+  async function handleSaveAsDefault() {
+    setFontSizeDialog(false);
+    const newDefault = fontSize;
+    setDefaultFontSize(newDefault);
+    if (config) {
+      const updated = { ...config, defaultFontSize: newDefault };
+      setConfig(updated);
+      await writeConfig(updated).catch(() => {});
+    }
+    doExport(newDefault);
+  }
+
+  function handleJustThisOnce() {
+    setFontSizeDialog(false);
+    doExport(fontSize);
   }
 
   async function showInFinder(filePath: string) {
@@ -198,149 +348,244 @@ export default function Editor() {
         body: JSON.stringify({ path: filePath }),
       });
     } catch {
-      // Non-critical
+      /* non-critical */
     }
   }
 
-  // ── Gates ──────────────────────────────────────────────────────────────────
+  function handleLoadSample() {
+    setEditedResume(SAMPLE_RESUME);
+    setError(null);
+    setPreviewSrc(null);
+  }
 
   if (dataLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600" />
+      <div className="app-canvas flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
       </div>
     );
   }
 
   if (!config?.setupComplete || !masterResume) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col">
-        <div className="bg-white border-b border-gray-200 px-6 py-3">
-          <h1 className="text-lg font-semibold text-gray-800">Resume Editor</h1>
-        </div>
-        <div className="flex-1 flex items-center justify-center p-6">
-          <div className="bg-white rounded-2xl border border-amber-200 shadow-sm p-10 max-w-md w-full text-center space-y-4">
-            <div className="text-4xl">📄</div>
-            <h2 className="text-xl font-semibold text-gray-800">No master resume found</h2>
-            <p className="text-sm text-gray-500">
-              Complete the setup flow to extract your resume and configure your AI model.
+      <div className="app-canvas flex min-h-screen flex-col">
+        <div className="flex flex-1 items-center justify-center p-6">
+          <Surface variant="solid" className="w-full max-w-md space-y-4 p-10 text-center">
+            <div className="text-4xl opacity-80">📄</div>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">No master resume found</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Finish setup to import your resume and start tailoring it to each role.
             </p>
-            <button
-              onClick={() => navigate("/setup")}
-              className="mt-2 px-6 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors"
-            >
-              Go to Setup
-            </button>
-          </div>
+            <Button type="button" onClick={() => navigate("/setup")} className="mt-2 w-full">
+              Go to setup
+            </Button>
+          </Surface>
         </div>
       </div>
     );
   }
 
-  // ── Main UI ────────────────────────────────────────────────────────────────
-
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* Top nav */}
-      <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-4 sticky top-0 z-10">
-        <h1 className="text-lg font-semibold text-gray-800">Resume Editor</h1>
-        <div className="ml-auto flex items-center gap-3">
-          {editedSections && (
-            <button
-              onClick={handleExport}
-              disabled={exportLoading}
-              className="px-4 py-1.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
-            >
-              {exportLoading ? "Exporting..." : "Export PDF"}
-            </button>
-          )}
-          <button
-            onClick={() => navigate("/settings")}
-            className="px-4 py-1.5 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50"
-          >
-            Settings
-          </button>
-        </div>
-      </div>
+    <div className="app-canvas flex h-screen overflow-hidden transition-colors duration-200">
+      <AppSidebar active="editor" config={config} />
 
-      <div className="flex-1 max-w-5xl mx-auto w-full p-6 space-y-6">
+      <div className="flex min-w-0 flex-1 gap-3 p-3">
+        <Surface variant="panel" className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="flex-1 overflow-y-auto px-6 py-6">
+            <div className="mx-auto max-w-3xl space-y-8">
+              <div>
+                <h2 className="text-base font-semibold tracking-tight text-gray-900 dark:text-gray-100">Job description</h2>
+                <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-gray-600 dark:text-gray-400">
+                  Paste the posting. We will match your resume to what they are looking for.
+                </p>
+                <Surface variant="inset" className="mt-4 rounded-xl px-4 py-3">
+                  <textarea
+                    rows={9}
+                    placeholder="Paste the full job description here…"
+                    value={jdText}
+                    onChange={(e) => setJdText(e.target.value)}
+                    className="w-full resize-none bg-transparent text-sm leading-relaxed text-gray-900 placeholder:text-gray-400 focus:outline-none dark:text-gray-100 dark:placeholder:text-gray-500"
+                  />
+                </Surface>
+                <Button
+                  type="button"
+                  variant="cta"
+                  onClick={handleEdit}
+                  disabled={!jdText.trim() || loading}
+                  className="mx-auto mt-4 h-9 w-28 shrink-0 px-1.5 py-0 text-center text-sm font-semibold leading-none"
+                >
+                  {loading ? "Tailoring…" : "Tailor"}
+                </Button>
+              </div>
 
-        {/* JD input */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div
-            className="flex items-center justify-between px-5 py-3 cursor-pointer hover:bg-gray-50"
-            onClick={() => setJdCollapsed(!jdCollapsed)}
-          >
-            <h2 className="font-semibold text-gray-800">Job Description</h2>
-            <span className="text-gray-400 text-sm">{jdCollapsed ? "▶ Expand" : "▼ Collapse"}</span>
+              <div className="h-px bg-gray-200/60 dark:bg-white/10" />
+
+              {loading && (
+                <div className="flex flex-col items-center justify-center py-14">
+                  <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
+                  <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Shaping your experience to fit this role…</p>
+                </div>
+              )}
+
+              {error && (
+                <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50/90 p-4 dark:border-red-900/50 dark:bg-red-950/30">
+                  <span className="text-red-600 dark:text-red-400">✕</span>
+                  <span className="flex-1 text-sm text-red-800 dark:text-red-200">{error}</span>
+                  <button type="button" onClick={handleEdit} className="text-sm font-medium text-red-700 underline dark:text-red-300">
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {editedSections && !loading && (
+                <div className="space-y-6">
+                  <h2 className="text-base font-semibold tracking-tight text-gray-900 dark:text-gray-100">Edited resume</h2>
+                  <ResumeEditor
+                    sections={editedSections}
+                    originalSections={masterSections}
+                    onSectionChange={handleSectionChange}
+                    onReaskSection={handleReaskSection}
+                    onResetSection={handleResetSection}
+                    label=""
+                  />
+                </div>
+              )}
+            </div>
           </div>
-          {!jdCollapsed && (
-            <div className="px-5 pb-5 space-y-3">
-              <textarea
-                rows={8}
-                placeholder="Paste the full job description here..."
-                value={jdText}
-                onChange={(e) => setJdText(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 text-sm resize-none"
-              />
-              <button
-                onClick={handleEdit}
-                disabled={!jdText.trim() || loading}
-                className="w-full py-2.5 bg-brand-600 text-white rounded-lg font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-brand-700 transition-colors"
+
+          {(import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV && (
+            <div className="border-t border-gray-200/60 px-6 py-2 dark:border-white/10">
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                onClick={handleLoadSample}
+                className="h-auto p-0 text-xs text-amber-700 decoration-dashed dark:text-amber-400"
+                title="Development only"
               >
-                {loading ? "Editing resume..." : "Tailor My Resume"}
-              </button>
+                Load sample resume
+              </Button>
             </div>
           )}
-        </div>
+        </Surface>
 
-        {/* Loading */}
-        {loading && (
-          <div className="flex items-center justify-center py-16">
-            <div className="text-center space-y-3">
-              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-brand-600 mx-auto" />
-              <p className="text-gray-500 text-sm">AI is tailoring your resume to the job description...</p>
+        <Surface variant="panel" className="flex w-[min(44vw,520px)] shrink-0 flex-col overflow-hidden">
+          <div className="relative min-h-0 flex-1 bg-white/30 dark:bg-white/[0.03]">
+            {previewSrc && (
+              <object
+                key={previewSrc}
+                data={previewSrc}
+                type="application/pdf"
+                className="h-full w-full"
+                style={{ display: "block", minHeight: "100%" }}
+              />
+            )}
+            <AnimatePresence>
+              {previewLoading && (
+                <motion.div
+                  key="preview-loading"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                  className={`absolute inset-0 flex items-center justify-center backdrop-blur-[2px] ${
+                    previewSrc ? "bg-white/65 dark:bg-[#1C1C1E]/65" : ""
+                  }`}
+                >
+                  <div className="text-center">
+                    <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-gray-400 border-t-brand-600" />
+                    <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">Updating preview…</p>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+            {!previewSrc && !previewLoading && (
+              <div className="absolute inset-0 flex items-center justify-center p-8">
+                <div className="text-center text-gray-500 dark:text-gray-400">
+                  <div className="text-5xl opacity-20">📄</div>
+                  <p className="mt-3 text-sm">Tailor your resume to see a live preview here.</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="shrink-0 space-y-2.5 border-t border-gray-200/60 px-3 py-3 dark:border-white/10">
+            {overflowWarning && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+                {overflowWarning}
+              </p>
+            )}
+            <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+              <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                Font size
+              </span>
+              <div className="flex min-w-0 max-w-full items-center gap-1.5">
+                <SegmentedControl
+                  className="min-w-0 max-w-[min(268px,100%)]"
+                  size="sm"
+                  value={String(fontSize)}
+                  onChange={(v) => {
+                    setFontSize(Number(v));
+                    setFontSizeManual(true);
+                  }}
+                  options={FONT_SIZES.map((s) => ({ value: String(s), label: String(s) }))}
+                />
+                <span className="shrink-0 text-[13px] font-medium tabular-nums text-gray-500 dark:text-gray-400">pt</span>
+              </div>
+              {fontSizeManual && fontSize !== defaultFontSize && (
+                <span className="shrink-0 text-[10px] text-amber-600 dark:text-amber-400">≠ saved default</span>
+              )}
             </div>
-          </div>
-        )}
 
-        {/* Error */}
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
-            <span className="text-red-600">✕</span>
-            <span className="text-sm text-red-800 flex-1">{error}</span>
-            <button onClick={handleEdit} className="text-red-600 underline text-sm">
-              Retry
-            </button>
-          </div>
-        )}
+            <Button
+              type="button"
+              variant="cta"
+              onClick={handleExportClick}
+              disabled={!editedResume || exportLoading}
+              className="mx-auto h-9 w-28 shrink-0 px-1.5 py-0 text-center text-sm font-semibold leading-none"
+            >
+              {exportLoading ? "Saving…" : "Save"}
+            </Button>
 
-        {/* Edited resume sections */}
-        {editedSections && !loading && (
-          <ResumeEditor
-            sections={editedSections}
-            originalSections={masterSections}
-            onSectionChange={handleSectionChange}
-            onReaskSection={handleReaskSection}
-            onResetSection={handleResetSection}
-          />
-        )}
+            {lastExportPath && (
+              <div className="flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <span className="truncate" title={lastExportPath}>
+                  Saved: {lastExportPath.split("/").pop()}
+                </span>
+                <Button type="button" variant="link" size="sm" className="h-auto shrink-0 p-0" onClick={() => showInFinder(lastExportPath)}>
+                  Show in Finder
+                </Button>
+              </div>
+            )}
+          </div>
+        </Surface>
       </div>
 
-      {/* Toast */}
-      {toast && (
-        <div className="fixed bottom-6 right-6 bg-green-600 text-white px-5 py-3 rounded-xl shadow-lg text-sm font-medium flex items-center gap-3">
-          <span>{toast}</span>
-          {lastExportPath && (
-            <button
-              onClick={() => showInFinder(lastExportPath)}
-              className="underline opacity-80 hover:opacity-100 whitespace-nowrap"
-            >
-              Show in Finder
-            </button>
-          )}
+      <Modal
+        open={fontSizeDialog}
+        onOpenChange={setFontSizeDialog}
+        title="Font size changed"
+        className="w-[min(420px,94vw)]"
+        dense
+      >
+        <div className="flex flex-col gap-4 px-5 pb-5 pt-2">
+          <p className="text-sm text-gray-600 dark:text-gray-300">
+            You changed font size from <span className="font-semibold">{defaultFontSize}pt</span> to{" "}
+            <span className="font-semibold">{fontSize}pt</span>. Save this as your new default, or use it only for this export?
+          </p>
+          <div className="flex gap-3">
+            <Button type="button" onClick={handleSaveAsDefault} className="flex-1">
+              Save as default
+            </Button>
+            <Button type="button" variant="secondary" onClick={handleJustThisOnce} className="flex-1">
+              Just this once
+            </Button>
+          </div>
+          <Button type="button" variant="ghost" size="sm" className="w-full text-xs text-gray-500" onClick={() => setFontSizeDialog(false)}>
+            Cancel
+          </Button>
         </div>
-      )}
+      </Modal>
     </div>
   );
 }
