@@ -1,0 +1,1 @@
+{"main-window":{"identifier":"main-window","description":"Permissions for the main app window","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open","dialog:allow-save","fs:default",{"identifier":"fs:scope","allow":[{"path":"$HOME/.resume-editor"},{"path":"$HOME/.resume-editor/**"}]},"store:allow-get","store:allow-set","store:allow-save"]}}

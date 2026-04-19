@@ -21,9 +21,9 @@ export default function ResumeEditor({
 }: ResumeEditorProps) {
   return (
     <div className="space-y-4">
-      <h2 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">
-        {label}
-      </h2>
+      {label ? (
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-400">{label}</h2>
+      ) : null}
       {Object.entries(sections).map(([key, content]) => (
         <SectionBlock
           key={key}

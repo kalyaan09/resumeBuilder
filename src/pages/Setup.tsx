@@ -3,12 +3,15 @@ import { useNavigate } from "react-router-dom";
 import ModelPicker from "../components/ModelPicker";
 import { getApiKey, setApiKey } from "../lib/secureStore";
 import { writeConfig, writeResume, readConfig } from "../lib/persistenceStore";
+import { applyTheme, Theme } from "../lib/themeStore";
+import { useConnection } from "../context/ConnectionContext";
+import { Button, Modal, SegmentedControl, Surface } from "../ui";
 
 interface SetupProps {
   onComplete: () => void;
 }
 
-type Phase = "model" | "info" | "extracting" | "suggestion";
+type Phase = "theme" | "model" | "info" | "extracting" | "suggestion";
 
 const ROLES = [
   "SDE", "DE", "ML Engineer", "Data Scientist", "Data Analyst",
@@ -57,9 +60,10 @@ function fileToBase64(file: File): Promise<string> {
 
 export default function Setup({ onComplete }: SetupProps) {
   const navigate = useNavigate();
+  const { backendReady, backendConnecting } = useConnection();
 
-  // Phase state
-  const [phase, setPhase] = useState<Phase>("model");
+  const [phase, setPhase] = useState<Phase>("theme");
+  const [selectedTheme, setSelectedTheme] = useState<Theme>("system");
 
   // Model config state
   const [modelConfig, setModelConfig] = useState<Record<string, string> | null>(null);
@@ -85,8 +89,9 @@ export default function Setup({ onComplete }: SetupProps) {
   const [backAndForthCount, setBackAndForthCount] = useState(0);
   const [validating, setValidating] = useState(false);
   const [validateError, setValidateError] = useState("");
+  const [llmWarning, setLlmWarning] = useState<string | null>(null);
+  const [previewModal, setPreviewModal] = useState<string | null>(null);
 
-  // Load existing model config on mount (pre-fill if user is redoing setup)
   useEffect(() => {
     readConfig().then((stored) => {
       const mc = stored?.modelConfig as Record<string, string> | undefined;
@@ -96,7 +101,16 @@ export default function Setup({ onComplete }: SetupProps) {
           if (key) setApiKeyState(key);
         });
       }
+      const t = (stored?.theme as Theme) || "system";
+      setSelectedTheme(t);
     });
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.classList.remove("dark");
+    return () => {
+      readConfig().then((c) => applyTheme(((c?.theme as Theme) || "system")));
+    };
   }, []);
 
   // ── Model phase ────────────────────────────────────────────────────────────
@@ -171,6 +185,7 @@ export default function Setup({ onComplete }: SetupProps) {
     if (!modelConfig) return;
     setValidating(true);
     setValidateError("");
+    setLlmWarning(null);
     try {
       const llm_config = { ...modelConfig, api_key: apiKey };
       const res = await fetch("http://localhost:8000/validate-template", {
@@ -192,12 +207,24 @@ export default function Setup({ onComplete }: SetupProps) {
       }
 
       const data = await res.json();
-      setSuggestion(data);
-      setEditTemplate(data.template);
-      setEditSections([...data.sections]);
       setUserFeedback("");
       setBackAndForthCount((c) => c + 1);
-      setEditMode(false);
+
+      const templateDiffers = data.template !== editTemplate;
+      const sectionsDiffer = JSON.stringify(data.sections) !== JSON.stringify(editSections);
+
+      if (templateDiffers || sectionsDiffer) {
+        // LLM disagrees — store its suggestion for reference but never override user's choices
+        setSuggestion(data);
+        setLlmWarning(data.reason || "AI suggests a different layout for your role.");
+        // editTemplate and editSections intentionally NOT updated
+      } else {
+        // LLM agrees with the user's choice
+        setSuggestion(data);
+        setEditTemplate(data.template);
+        setEditSections([...data.sections]);
+        setEditMode(false);
+      }
     } catch (err: any) {
       setValidateError(err.message || "Unknown error");
     } finally {
@@ -205,26 +232,42 @@ export default function Setup({ onComplete }: SetupProps) {
     }
   }
 
+  function handleProceedWithMyChoice() {
+    // Lock in user's current editTemplate/editSections as the final suggestion
+    setSuggestion((s) => s ? { ...s, template: editTemplate, sections: [...editSections] } : s);
+    setLlmWarning(null);
+    setEditMode(false);
+  }
+
   async function handleLooksGood() {
     const finalTemplate = editMode ? editTemplate : suggestion!.template;
     const finalSections = editMode ? editSections : suggestion!.sections;
 
-    await writeConfig({
-      setupComplete: true,
-      template: finalTemplate,
-      role,
-      level,
-      activeSections: finalSections,
-      sectionOrder: finalSections,
-      modelConfig: { ...modelConfig },
-      savePath: "~/Documents/Resumes",
-    });
+    try {
+      const existing = (await readConfig()) || {};
+      const nextConfig = {
+        ...existing,
+        theme: ((existing as Record<string, unknown>).theme as Theme | undefined) ?? selectedTheme,
+        setupComplete: true,
+        template: finalTemplate,
+        role,
+        level,
+        activeSections: finalSections,
+        sectionOrder: finalSections,
+        modelConfig: { ...modelConfig! },
+        savePath: "~/Documents/Resumes",
+      };
+      await writeConfig(nextConfig);
 
-    await writeResume(extractedResume as Record<string, unknown>);
-    await setApiKey(modelConfig!.provider, apiKey);
+      await writeResume(extractedResume as Record<string, unknown>);
+      await setApiKey(modelConfig!.provider, apiKey);
 
-    onComplete();
-    navigate("/editor");
+      applyTheme((nextConfig.theme as Theme) || "system");
+      onComplete();
+      navigate("/editor");
+    } catch (err: unknown) {
+      setExtractError("Could not save: " + (err instanceof Error ? err.message : String(err)));
+    }
   }
 
   // ── Section reorder helpers ────────────────────────────────────────────────
@@ -253,76 +296,90 @@ export default function Setup({ onComplete }: SetupProps) {
     if (backAndForthCount < 5) return null;
     if (backAndForthCount >= 10) {
       return (
-        <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
-          You've gone back and forth {backAndForthCount} times — this is getting expensive.
-          Each call uses your API tokens. Are you sure you want to continue?
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          You have tried many revisions ({backAndForthCount}). Each one uses your chosen provider. Want to pause and
+          fine-tune the layout in the editor instead?
         </div>
       );
     }
     if (backAndForthCount >= 7) {
       return (
-        <div className="p-3 rounded-lg bg-orange-50 border border-orange-200 text-orange-700 text-sm">
-          {backAndForthCount} back-and-forth iterations — each uses your API tokens.
-          Consider accepting a suggestion and adjusting manually in the editor.
+        <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800">
+          {backAndForthCount} revisions so far — each uses your provider. You can accept a layout and tweak details later
+          in settings.
         </div>
       );
     }
     return (
-      <div className="p-3 rounded-lg bg-yellow-50 border border-yellow-200 text-yellow-700 text-sm">
-        {backAndForthCount} iterations — each request uses your API tokens.
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        {backAndForthCount} revisions — each uses your provider account.
       </div>
     );
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-
-  const phaseIndex = { model: 0, info: 1, extracting: 2, suggestion: 2 }[phase];
+  const setupStep =
+    phase === "theme"
+      ? 1
+      : phase === "model"
+        ? 2
+        : phase === "info" || phase === "extracting"
+          ? 3
+          : 4;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-brand-50 to-white flex items-center justify-center p-6">
-      <div className="w-full max-w-2xl">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Resume Editor</h1>
-          <p className="text-gray-500 mt-1">Set up your workspace — only needed once</p>
+    <div
+      className="flex min-h-screen items-center justify-center bg-gradient-to-br from-sky-50 via-blue-50/30 to-white p-6 text-gray-900"
+      onClick={() => previewModal && setPreviewModal(null)}
+    >
+      <div className="w-full max-w-lg">
+        <div className="mb-8 text-center">
+          <div className="mb-4 flex justify-center">
+            <img src="/app_icon.png" alt="" className="h-14 w-14 rounded-2xl shadow-card" width={56} height={56} />
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-gray-900">Welcome to Resume Pro</h1>
+          <p className="mt-2 text-sm text-gray-500">A quick setup — then you are ready to tailor your resume for every role.</p>
         </div>
 
-        {/* Progress steps */}
-        <div className="flex items-center gap-2 mb-8">
-          {["AI Model", "Your Info", "Template"].map((label, i) => (
-            <div key={i} className="flex items-center gap-2 flex-1">
-              <div className="flex items-center gap-2">
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 ${
-                    phaseIndex > i
-                      ? "bg-green-500 text-white"
-                      : phaseIndex === i
-                      ? "bg-brand-600 text-white"
-                      : "bg-gray-200 text-gray-500"
-                  }`}
-                >
-                  {phaseIndex > i ? "✓" : i + 1}
-                </div>
-                <span className={`text-xs font-medium hidden sm:block ${phaseIndex === i ? "text-brand-700" : "text-gray-400"}`}>
-                  {label}
-                </span>
+        <Surface variant="solid" className="border-gray-100/80 p-8 shadow-card">
+          <p className="mb-6 text-center text-xs font-medium uppercase tracking-wider text-gray-400">
+            Step {setupStep} of 4
+          </p>
+
+          {phase === "theme" && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="mb-1 text-xl font-semibold text-gray-900">Choose your look</h2>
+                <p className="text-sm text-gray-500">Pick a theme for after setup. This screen stays bright so it is easy to read.</p>
               </div>
-              {i < 2 && (
-                <div className={`flex-1 h-1 rounded ${phaseIndex > i ? "bg-green-400" : "bg-gray-200"}`} />
-              )}
+              <SegmentedControl<Theme>
+                value={selectedTheme}
+                onChange={setSelectedTheme}
+                options={[
+                  { value: "light", label: "Light" },
+                  { value: "dark", label: "Dark" },
+                  { value: "system", label: "System" },
+                ]}
+              />
+              <Button
+                type="button"
+                className="w-full py-3 text-sm font-semibold"
+                onClick={async () => {
+                  const prev = (await readConfig()) || {};
+                  await writeConfig({ ...prev, theme: selectedTheme });
+                  setPhase("model");
+                }}
+              >
+                Continue
+              </Button>
             </div>
-          ))}
-        </div>
+          )}
 
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
-
-          {/* ── Phase: model ── */}
           {phase === "model" && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-xl font-semibold text-gray-800 mb-1">Choose your AI model</h2>
+                <h2 className="mb-1 text-xl font-semibold text-gray-900">Connect your assistant</h2>
                 <p className="text-sm text-gray-500">
-                  The model extracts your resume and suggests improvements. Pick one and test the connection.
+                  Choose who helps read your resume and suggest wording. Run a quick check to be sure it responds.
                 </p>
               </div>
 
@@ -335,18 +392,24 @@ export default function Setup({ onComplete }: SetupProps) {
               />
 
               {modelVerified && (
-                <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
-                  Connection verified. You're ready to continue.
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                  Nice — we heard back from your provider. You can continue.
                 </div>
               )}
 
-              <button
-                disabled={!modelVerified || !modelConfig}
-                onClick={() => setPhase("info")}
-                className="w-full py-2.5 bg-brand-600 text-white rounded-lg font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-brand-700 transition-colors"
-              >
-                Continue →
-              </button>
+              <div className="flex gap-3">
+                <Button type="button" variant="secondary" className="flex-1" onClick={() => setPhase("theme")}>
+                  Back
+                </Button>
+                <Button
+                  type="button"
+                  className="flex-1"
+                  disabled={!modelVerified || !modelConfig}
+                  onClick={() => setPhase("info")}
+                >
+                  Continue
+                </Button>
+              </div>
             </div>
           )}
 
@@ -354,15 +417,15 @@ export default function Setup({ onComplete }: SetupProps) {
           {phase === "info" && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-xl font-semibold text-gray-800 mb-1">Tell us about you</h2>
-                <p className="text-sm text-gray-500">
+                <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-1">Tell us about you</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
                   We'll use this to suggest the best resume layout.
                 </p>
               </div>
 
               {/* Role */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Target Role</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Target Role</label>
                 <div className="flex flex-wrap gap-2">
                   {ROLES.map((r) => (
                     <button
@@ -371,7 +434,7 @@ export default function Setup({ onComplete }: SetupProps) {
                       className={`px-3 py-1.5 rounded-lg text-sm border font-medium transition-all ${
                         role === r
                           ? "bg-brand-600 text-white border-brand-600"
-                          : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
+                          : "bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-500"
                       }`}
                     >
                       {r}
@@ -382,7 +445,7 @@ export default function Setup({ onComplete }: SetupProps) {
 
               {/* Level */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Experience Level</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Experience Level</label>
                 <div className="space-y-2">
                   {LEVELS.map((l) => (
                     <button
@@ -390,8 +453,8 @@ export default function Setup({ onComplete }: SetupProps) {
                       onClick={() => setLevel(l.value)}
                       className={`w-full text-left px-4 py-3 rounded-lg border transition-all ${
                         level === l.value
-                          ? "border-brand-500 bg-brand-50 text-brand-700"
-                          : "border-gray-200 hover:border-gray-300"
+                          ? "border-brand-500 bg-brand-50 dark:bg-brand-900/20 text-brand-700 dark:text-brand-400"
+                          : "border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-500"
                       }`}
                     >
                       {l.label}
@@ -402,11 +465,11 @@ export default function Setup({ onComplete }: SetupProps) {
 
               {/* Resume upload */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Upload your resume <span className="text-red-500">*</span>
-                  <span className="text-gray-400 font-normal ml-1">(.tex, .docx, or .pdf)</span>
+                  <span className="text-gray-400 dark:text-gray-500 font-normal ml-1">(.tex, .docx, or .pdf)</span>
                 </label>
-                <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-brand-400 hover:bg-brand-50 transition-colors">
+                <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer hover:border-brand-400 hover:bg-brand-50 dark:hover:bg-brand-900/20 transition-colors">
                   <input
                     type="file"
                     accept=".tex,.docx,.pdf"
@@ -418,38 +481,43 @@ export default function Setup({ onComplete }: SetupProps) {
                   />
                   {resumeFile ? (
                     <div className="text-center">
-                      <p className="text-brand-600 font-medium">{resumeFile.name}</p>
-                      <p className="text-xs text-gray-400 mt-1">Click to change</p>
+                      <p className="text-brand-600 dark:text-brand-400 font-medium">{resumeFile.name}</p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Click to change</p>
                     </div>
                   ) : (
                     <div className="text-center">
-                      <p className="text-gray-500 text-sm">Drop your resume here</p>
-                      <p className="text-xs text-gray-400 mt-1">or click to browse</p>
+                      <p className="text-gray-500 dark:text-gray-400 text-sm">Drop your resume here</p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">or click to browse</p>
                     </div>
                   )}
                 </label>
               </div>
 
               {extractError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
                   {extractError}
                 </div>
               )}
 
+              {backendConnecting && !backendReady && (
+                <div className="flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-800">
+                  <div className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-sky-400 border-t-sky-700" />
+                  Getting things ready on your Mac — first launch can take up to a minute.
+                </div>
+              )}
+
               <div className="flex gap-3">
-                <button
-                  onClick={() => setPhase("model")}
-                  className="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
-                >
+                <Button type="button" variant="secondary" className="flex-1" onClick={() => setPhase("model")}>
                   Back
-                </button>
-                <button
-                  disabled={!role || !level || !resumeFile}
+                </Button>
+                <Button
+                  type="button"
+                  className="flex-1"
+                  disabled={!role || !level || !resumeFile || !backendReady}
                   onClick={handleStartExtraction}
-                  className="flex-1 py-2.5 bg-brand-600 text-white rounded-lg font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-brand-700 transition-colors"
                 >
-                  Extract & Continue →
-                </button>
+                  {backendConnecting && !backendReady ? "Almost ready…" : "Import resume & continue"}
+                </Button>
               </div>
             </div>
           )}
@@ -459,8 +527,8 @@ export default function Setup({ onComplete }: SetupProps) {
             <div className="flex flex-col items-center justify-center py-12 space-y-6">
               <div className="w-14 h-14 rounded-full border-4 border-brand-200 border-t-brand-600 animate-spin" />
               <div className="text-center">
-                <p className="text-gray-800 font-medium">{extractStatus}</p>
-                <p className="text-sm text-gray-400 mt-1">This usually takes 15–30 seconds</p>
+                <p className="text-gray-800 dark:text-gray-200 font-medium">{extractStatus}</p>
+                <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">This usually takes 15–30 seconds</p>
               </div>
             </div>
           )}
@@ -469,26 +537,43 @@ export default function Setup({ onComplete }: SetupProps) {
           {phase === "suggestion" && suggestion && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-xl font-semibold text-gray-800 mb-1">We suggest this layout</h2>
-                <p className="text-sm text-gray-500">Based on your role and experience level.</p>
+                <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-1">We suggest this layout</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Based on your role and experience level.</p>
               </div>
+
+              {extractError && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
+                  {extractError}
+                </div>
+              )}
 
               {!editMode ? (
                 /* Suggestion card */
-                <div className="border border-brand-200 bg-brand-50 rounded-xl p-5 space-y-4">
+                <div className="border border-brand-200 dark:border-brand-800 bg-brand-50 dark:bg-brand-900/20 rounded-xl p-5 space-y-4">
                   <div>
-                    <p className="text-xs font-semibold text-brand-500 uppercase tracking-wide">Template</p>
-                    <p className="text-lg font-semibold text-gray-900 mt-0.5">
-                      {TEMPLATE_LABELS[suggestion.template] || suggestion.template}
-                    </p>
+                    <p className="text-xs font-semibold text-brand-500 dark:text-brand-400 uppercase tracking-wide">Template</p>
+                    <div className="flex items-center gap-3 mt-0.5">
+                      <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                        {TEMPLATE_LABELS[suggestion.template] || suggestion.template}
+                      </p>
+                      <Button
+                        type="button"
+                        variant="link"
+                        size="sm"
+                        className="h-auto p-0 text-xs font-medium"
+                        onClick={() => setPreviewModal(suggestion.template)}
+                      >
+                        Preview
+                      </Button>
+                    </div>
                   </div>
 
                   <div>
-                    <p className="text-xs font-semibold text-brand-500 uppercase tracking-wide mb-2">Section Order</p>
+                    <p className="text-xs font-semibold text-brand-500 dark:text-brand-400 uppercase tracking-wide mb-2">Section Order</p>
                     <ol className="space-y-1">
                       {suggestion.sections.map((s, i) => (
-                        <li key={s} className="flex items-center gap-2 text-sm text-gray-700">
-                          <span className="w-5 h-5 rounded-full bg-brand-200 text-brand-700 text-xs flex items-center justify-center font-semibold flex-shrink-0">
+                        <li key={s} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                          <span className="w-5 h-5 rounded-full bg-brand-200 dark:bg-brand-800 text-brand-700 dark:text-brand-300 text-xs flex items-center justify-center font-semibold flex-shrink-0">
                             {i + 1}
                           </span>
                           {SECTION_LABELS[s] || s}
@@ -497,8 +582,8 @@ export default function Setup({ onComplete }: SetupProps) {
                     </ol>
                   </div>
 
-                  <div className="pt-1 border-t border-brand-200">
-                    <p className="text-xs text-brand-700 italic">{suggestion.reason}</p>
+                  <div className="pt-1 border-t border-brand-200 dark:border-brand-800">
+                    <p className="text-xs text-brand-700 dark:text-brand-400 italic">{suggestion.reason}</p>
                   </div>
                 </div>
               ) : (
@@ -508,50 +593,92 @@ export default function Setup({ onComplete }: SetupProps) {
 
                   {/* Template picker */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Template</label>
-                    <div className="flex flex-wrap gap-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Template</label>
+                    <div className="grid grid-cols-2 gap-3">
                       {Object.entries(TEMPLATE_LABELS).map(([id, name]) => (
-                        <button
+                        <div
                           key={id}
                           onClick={() => setEditTemplate(id)}
-                          className={`px-3 py-1.5 rounded-lg text-sm border font-medium transition-all ${
+                          className={`relative cursor-pointer rounded-xl border-2 overflow-hidden transition-all ${
                             editTemplate === id
-                              ? "bg-brand-600 text-white border-brand-600"
-                              : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
+                              ? "border-brand-600 ring-2 ring-brand-200 dark:ring-brand-800"
+                              : "border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500"
                           }`}
                         >
-                          {name}
-                        </button>
+                          {/* Thumbnail — PDF scaled down via CSS transform */}
+                          <div className="relative bg-white overflow-hidden group" style={{ height: "160px" }}>
+                            <div style={{
+                              position: "absolute", top: 0, left: 0,
+                              width: "816px", height: "1056px",
+                              transformOrigin: "top left", transform: "scale(0.35)",
+                              pointerEvents: "none",
+                            }}>
+                              <object
+                                data={`http://localhost:8000/template-preview-pdf/${id}`}
+                                type="application/pdf"
+                                style={{ width: "816px", height: "1056px", display: "block" }}
+                              />
+                            </div>
+                            {/* Hover overlay */}
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-all">
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPreviewModal(id);
+                                }}
+                                className="pointer-events-auto rounded-full px-3 py-1.5 text-xs font-semibold opacity-0 shadow-md transition-opacity group-hover:opacity-100"
+                              >
+                                View full preview
+                              </Button>
+                            </div>
+                          </div>
+                          {/* Label bar */}
+                          <div className={`px-3 py-2 flex items-center justify-between ${editTemplate === id ? "bg-brand-50 dark:bg-brand-900/20" : "bg-white dark:bg-gray-800"}`}>
+                            <span className={`text-xs font-medium truncate ${editTemplate === id ? "text-brand-700 dark:text-brand-400" : "text-gray-700 dark:text-gray-300"}`}>
+                              {name}
+                            </span>
+                            {editTemplate === id && (
+                              <span className="w-4 h-4 rounded-full bg-brand-600 flex items-center justify-center flex-shrink-0 ml-1">
+                                <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 12 12">
+                                  <path d="M10 3L5 8.5 2 5.5l-1 1 4 4 6-7-1-1z"/>
+                                </svg>
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   </div>
 
                   {/* Section reorder */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Sections (drag to reorder)</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Sections (drag to reorder)</label>
                     <div className="space-y-1.5">
                       {editSections.map((s, i) => (
-                        <div key={s} className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg border border-gray-200">
+                        <div key={s} className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
                           <div className="flex flex-col gap-0.5">
                             <button
                               onClick={() => moveSection(i, -1)}
                               disabled={i === 0}
-                              className="text-gray-400 hover:text-gray-600 disabled:opacity-20 text-xs leading-none"
+                              className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-20 text-xs leading-none"
                             >
                               ▲
                             </button>
                             <button
                               onClick={() => moveSection(i, 1)}
                               disabled={i === editSections.length - 1}
-                              className="text-gray-400 hover:text-gray-600 disabled:opacity-20 text-xs leading-none"
+                              className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-20 text-xs leading-none"
                             >
                               ▼
                             </button>
                           </div>
-                          <span className="flex-1 text-sm text-gray-700">{SECTION_LABELS[s] || s}</span>
+                          <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">{SECTION_LABELS[s] || s}</span>
                           <button
                             onClick={() => removeSection(i)}
-                            className="text-gray-300 hover:text-red-500 text-sm transition-colors"
+                            className="text-gray-300 dark:text-gray-600 hover:text-red-500 text-sm transition-colors"
                           >
                             ✕
                           </button>
@@ -562,13 +689,13 @@ export default function Setup({ onComplete }: SetupProps) {
                     {/* Add section */}
                     {ALL_SECTIONS.filter((s) => !editSections.includes(s)).length > 0 && (
                       <div className="mt-2">
-                        <p className="text-xs text-gray-400 mb-1.5">Add section:</p>
+                        <p className="text-xs text-gray-400 dark:text-gray-500 mb-1.5">Add section:</p>
                         <div className="flex flex-wrap gap-1.5">
                           {ALL_SECTIONS.filter((s) => !editSections.includes(s)).map((s) => (
                             <button
                               key={s}
                               onClick={() => addSection(s)}
-                              className="px-2.5 py-1 text-xs border border-dashed border-gray-300 text-gray-500 rounded-lg hover:border-brand-400 hover:text-brand-600 transition-colors"
+                              className="px-2.5 py-1 text-xs border border-dashed border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 rounded-lg hover:border-brand-400 hover:text-brand-600 dark:hover:text-brand-400 transition-colors"
                             >
                               + {SECTION_LABELS[s] || s}
                             </button>
@@ -580,37 +707,56 @@ export default function Setup({ onComplete }: SetupProps) {
 
                   {/* Feedback */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                       Tell the AI what to change{" "}
-                      <span className="text-gray-400 font-normal">(optional)</span>
+                      <span className="text-gray-400 dark:text-gray-500 font-normal">(optional)</span>
                     </label>
                     <textarea
                       rows={3}
                       placeholder="e.g. I prefer FAANGPath template, and want certifications before education"
                       value={userFeedback}
                       onChange={(e) => setUserFeedback(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none"
                     />
                   </div>
 
                   {validateError && (
-                    <p className="text-sm text-red-600">{validateError}</p>
+                    <p className="text-sm text-red-600 dark:text-red-400">{validateError}</p>
+                  )}
+
+                  {/* LLM disagrees with user's choice — warn but never override */}
+                  {llmWarning && (
+                    <div className="p-3.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 space-y-2.5">
+                      <p className="text-sm text-amber-900 dark:text-amber-300">
+                        <span className="font-semibold">AI suggests this may not be optimal for your role</span>
+                        {" — but you can proceed anyway."}
+                      </p>
+                      <p className="text-xs text-amber-700 dark:text-amber-400 italic">{llmWarning}</p>
+                      <Button
+                        type="button"
+                        onClick={handleProceedWithMyChoice}
+                        className="w-full bg-amber-600 py-2 text-sm font-semibold hover:bg-amber-700"
+                      >
+                        Proceed with my choice →
+                      </Button>
+                    </div>
                   )}
 
                   <div className="flex gap-3">
-                    <button
-                      onClick={() => setEditMode(false)}
-                      className="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="flex-1"
+                      onClick={() => {
+                        setEditMode(false);
+                        setLlmWarning(null);
+                      }}
                     >
                       Cancel
-                    </button>
-                    <button
-                      onClick={handleRevalidate}
-                      disabled={validating}
-                      className="flex-1 py-2.5 bg-brand-600 text-white rounded-lg font-medium disabled:opacity-50 hover:bg-brand-700 transition-colors"
-                    >
+                    </Button>
+                    <Button type="button" className="flex-1" onClick={handleRevalidate} disabled={validating}>
                       {validating ? "Asking AI..." : "Re-evaluate →"}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
@@ -618,24 +764,50 @@ export default function Setup({ onComplete }: SetupProps) {
               {/* Action buttons (shown when not in edit mode) */}
               {!editMode && (
                 <div className="flex gap-3">
-                  <button
-                    onClick={() => setEditMode(true)}
-                    className="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="flex-1"
+                    onClick={() => {
+                      setEditMode(true);
+                      setLlmWarning(null);
+                    }}
                   >
                     Change it
-                  </button>
-                  <button
-                    onClick={handleLooksGood}
-                    className="flex-1 py-2.5 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors"
-                  >
+                  </Button>
+                  <Button type="button" className="flex-1" onClick={handleLooksGood}>
                     Looks good! →
-                  </button>
+                  </Button>
                 </div>
               )}
             </div>
           )}
-        </div>
+        </Surface>
       </div>
+
+      <Modal
+        open={!!previewModal}
+        onOpenChange={(open) => !open && setPreviewModal(null)}
+        title={previewModal ? `${TEMPLATE_LABELS[previewModal]} — Sample preview` : "Preview"}
+        className="w-[min(760px,96vw)]"
+        footer={
+          <p className="text-center text-xs text-gray-500 dark:text-gray-400">
+            Generated with sample data — your resume will use your actual content
+          </p>
+        }
+      >
+        {previewModal ? (
+          <div className="h-[min(78vh,760px)] min-h-[420px] w-full bg-neutral-200 dark:bg-neutral-700">
+            <object
+              key={previewModal}
+              data={`http://localhost:8000/template-preview-pdf/${previewModal}#toolbar=1&navpanes=0`}
+              type="application/pdf"
+              className="h-full w-full"
+              style={{ display: "block" }}
+            />
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

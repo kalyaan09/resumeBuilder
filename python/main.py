@@ -1,4 +1,6 @@
 import sys
+import os
+
 import logging
 
 LOG_FILE = "/tmp/resume_debug.log"
@@ -15,8 +17,11 @@ log = logging.getLogger("resume")
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, Any
+from contextlib import asynccontextmanager
+import asyncio
 import uvicorn
 import os
 import json
@@ -24,11 +29,57 @@ import base64
 from pathlib import Path
 
 from llm_client import LLMClient
-from pdf_exporter import export_to_pdf
+from pdf_exporter import export_to_pdf, render_preview_pdf_to_path, render_html, render_pdf_to_path
 from resume_extractor import extract_resume_to_json
 from presets import get_preset
 
-app = FastAPI(title="Resume Editor Sidecar")
+_VALID_TEMPLATES = {"jake", "faangpath", "sb2nov", "myresume"}
+
+PREVIEW_VERSION = 1
+
+# Store generated previews in user data dir — works in both dev and frozen mode
+PREVIEWS_DIR = Path.home() / ".resume-editor" / "previews"
+PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+_VERSION_FILE = PREVIEWS_DIR / "version.txt"
+
+
+def _generate_static_previews():
+    """Generate dummy-data preview PDFs for all templates, skipping if already cached."""
+    current_version = str(PREVIEW_VERSION)
+    stored_version = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else ""
+
+    if stored_version != current_version:
+        log.info("[previews] version changed (%s → %s), clearing old previews", stored_version, current_version)
+        for f in PREVIEWS_DIR.glob("*.pdf"):
+            f.unlink(missing_ok=True)
+        for f in PREVIEWS_DIR.glob("*.png"):
+            f.unlink(missing_ok=True)
+        # Write version NOW so an interrupted run doesn't re-clear on the next launch
+        _VERSION_FILE.write_text(current_version)
+
+    missing = [t for t in _VALID_TEMPLATES if not (PREVIEWS_DIR / f"{t}_preview.pdf").exists()]
+    if not missing:
+        log.info("[previews] all %d previews cached — skipping generation (version %s)", len(_VALID_TEMPLATES), current_version)
+        return
+
+    log.info("[previews] generating %d missing preview(s): %s", len(missing), missing)
+    for template_name in missing:
+        out = PREVIEWS_DIR / f"{template_name}_preview.pdf"
+        render_preview_pdf_to_path(template_name, str(out))
+        log.info("[previews] saved %s_preview.pdf (%d bytes)", template_name, out.stat().st_size)
+
+    _VERSION_FILE.write_text(current_version)
+    log.info("[previews] all static previews ready (version %s)", current_version)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Run Playwright (sync API) in a thread so it doesn't block the event loop
+    await asyncio.get_event_loop().run_in_executor(None, _generate_static_previews)
+    yield
+
+
+app = FastAPI(title="Resume Editor Sidecar", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,6 +112,24 @@ class ExportPdfRequest(BaseModel):
     section_order: list = []
     active_sections: list = []
     save_path: str = "~/Documents/Resumes"
+    font_size: float = 10.0
+    auto_fit: bool = False
+
+
+class PreviewResumeRequest(BaseModel):
+    resume: dict
+    template: str = "jake"
+    section_order: list = []
+    active_sections: list = []
+    font_size: float = 10.0
+
+
+class PreviewPdfRequest(BaseModel):
+    resume: dict
+    template: str = "jake"
+    section_order: list = []
+    active_sections: list = []
+    font_size: float = 10.0
 
 
 class ExtractResumeRequest(BaseModel):
@@ -330,22 +399,85 @@ Return the rewritten section content as JSON only (same type/structure as input)
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/preview-resume")
+def preview_resume(req: PreviewResumeRequest):
+    """Render resume to HTML for live preview — no PDF/Playwright, just Jinja2."""
+    try:
+        html = render_html(
+            resume=req.resume,
+            template_name=req.template,
+            section_order=req.section_order,
+            active_sections=req.active_sections,
+            font_size=req.font_size,
+        )
+        return {"html": html}
+    except Exception as e:
+        log.exception("[preview-resume] error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+_PREVIEW_PDF_PATH = Path.home() / ".resume-editor" / "preview.pdf"
+
+
+@app.post("/preview-pdf")
+def preview_pdf(req: PreviewPdfRequest):
+    """
+    Render resume to a fixed PDF path (~/.resume-editor/preview.pdf).
+    Returns the absolute path so the frontend can load it via convertFileSrc.
+    """
+    try:
+        _PREVIEW_PDF_PATH.parent.mkdir(parents=True, exist_ok=True)
+        overflow_warning = render_pdf_to_path(
+            resume=req.resume,
+            template_name=req.template,
+            section_order=req.section_order,
+            active_sections=req.active_sections,
+            output_path=str(_PREVIEW_PDF_PATH),
+            font_size=req.font_size,
+        )
+        log.info("[preview-pdf] saved to %s overflow=%s", _PREVIEW_PDF_PATH, overflow_warning is not None)
+        return {"file_path": str(_PREVIEW_PDF_PATH), "overflow_warning": overflow_warning}
+    except Exception as e:
+        log.exception("[preview-pdf] error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/preview-pdf-file")
+def get_preview_pdf_file():
+    """Serve the last generated preview PDF over HTTP so WKWebView can display it."""
+    if not _PREVIEW_PDF_PATH.exists():
+        raise HTTPException(status_code=404, detail="No preview PDF generated yet")
+    return FileResponse(
+        path=str(_PREVIEW_PDF_PATH),
+        media_type="application/pdf",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.post("/export-pdf")
 def export_pdf(req: ExportPdfRequest):
     try:
         save_dir = Path(os.path.expanduser(req.save_path))
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        file_path = export_to_pdf(
+        file_path, chosen_font_size, overflow_warning = export_to_pdf(
             resume=req.resume,
             template=req.template,
             section_order=req.section_order,
             active_sections=req.active_sections,
             save_dir=str(save_dir),
+            font_size=req.font_size,
+            auto_fit=req.auto_fit,
         )
 
-        log.info("[export-pdf] saved to %s", file_path)
-        return {"success": True, "file_path": file_path}
+        log.info("[export-pdf] saved to %s (font_size=%.1f, overflow=%s)",
+                 file_path, chosen_font_size, overflow_warning is not None)
+        return {
+            "success": True,
+            "file_path": file_path,
+            "font_size": chosen_font_size,
+            "overflow_warning": overflow_warning,
+        }
     except Exception as e:
         log.exception("[export-pdf] error")
         raise HTTPException(status_code=500, detail=str(e))
@@ -463,6 +595,21 @@ def open_folder(req: OpenFolderRequest):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+
+@app.get("/template-preview-pdf/{template_name}")
+def template_preview_pdf(template_name: str):
+    """Return the cached preview PDF for the named template, generating on-demand if missing."""
+    if template_name not in _VALID_TEMPLATES:
+        raise HTTPException(status_code=404, detail=f"Unknown template: {template_name}")
+    pdf_path = PREVIEWS_DIR / f"{template_name}_preview.pdf"
+    if not pdf_path.exists():
+        log.info("[template-preview-pdf] generating on-demand for %s", template_name)
+        render_preview_pdf_to_path(template_name, str(pdf_path))
+    return FileResponse(
+        path=str(pdf_path),
+        media_type="application/pdf",
+        headers={"Cache-Control": "no-store"},
+    )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

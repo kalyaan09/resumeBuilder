@@ -150,7 +150,7 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
         [provider]:
           provider === "ollama"
             ? "Ollama is not running — start it with `ollama serve`"
-            : "Sidecar not reachable. Is the Python server running?",
+            : "Could not reach the local preview service. Try starting the app again.",
       }));
     }
   }
@@ -170,7 +170,7 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
               selectedProvider === p.id
                 ? "bg-brand-600 text-white border-brand-600"
-                : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
+                : "bg-white dark:bg-[#2C2C2E] border-gray-200 dark:border-[#3A3A3C] text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-500"
             }`}
           >
             {p.name}
@@ -179,12 +179,12 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
       </div>
 
       {currentProvider && (
-        <div className="border border-gray-200 rounded-lg p-4 space-y-3">
-          <p className="text-xs text-gray-500">{currentProvider.description}</p>
+        <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-[#3A3A3C] dark:bg-[#2C2C2E] space-y-3">
+          <p className="text-xs text-gray-500 dark:text-gray-400">{currentProvider.description}</p>
 
           {currentProvider.fields.map((field) => (
             <div key={field.key}>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 {field.label}
               </label>
               {field.options ? (
@@ -196,13 +196,13 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
                       onClick={() => handleFieldChange(field.key, opt.value)}
                       className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-all ${
                         (value as any)?.[field.key] === opt.value
-                          ? "border-brand-500 bg-brand-50 text-brand-700"
-                          : "border-gray-200 hover:border-gray-300 text-gray-700"
+                          ? "border-brand-500 bg-brand-50 dark:bg-[#3A3A3C] text-brand-700 dark:text-white"
+                          : "border-gray-200 dark:border-[#3A3A3C] hover:border-gray-300 dark:hover:border-gray-500 text-gray-700 dark:text-gray-300"
                       }`}
                     >
                       <span className="font-mono font-medium">{opt.label}</span>
                       {opt.note && (
-                        <span className="ml-2 text-xs text-gray-400">{opt.note}</span>
+                        <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">{opt.note}</span>
                       )}
                     </button>
                   ))}
@@ -213,7 +213,7 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
                   placeholder={field.placeholder}
                   value={field.key === "api_key" ? apiKey : ((value as any)?.[field.key] || "")}
                   onChange={(e) => handleFieldChange(field.key, e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 dark:border-[#3A3A3C] dark:bg-[#1C1C1E] dark:text-gray-100"
                 />
               )}
             </div>
@@ -223,15 +223,15 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
             <button
               onClick={handleTest}
               disabled={status === "loading"}
-              className="px-4 py-1.5 bg-gray-100 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+              className="rounded-lg border border-gray-300 bg-gray-100 px-4 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-200 disabled:opacity-50 dark:border-[#3A3A3C] dark:bg-[#3A3A3C] dark:text-gray-200 dark:hover:bg-[#48484A]"
             >
               {status === "loading" ? "Testing..." : "Test Connection"}
             </button>
             {status === "ok" && (
-              <span className="text-green-600 text-sm">✅ {message}</span>
+              <span className="text-green-600 dark:text-green-400 text-sm">✅ {message}</span>
             )}
             {status === "error" && (
-              <span className="text-red-600 text-sm">❌ {message}</span>
+              <span className="text-red-600 dark:text-red-400 text-sm">❌ {message}</span>
             )}
           </div>
         </div>
