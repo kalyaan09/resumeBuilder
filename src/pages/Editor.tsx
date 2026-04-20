@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
+import { Eraser, Save, Sparkles } from "lucide-react";
 import ResumeEditor from "../components/ResumeEditor";
 import AppSidebar from "../components/AppSidebar";
 import { getApiKey } from "../lib/secureStore";
@@ -398,27 +399,44 @@ export default function Editor() {
                 <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-gray-600 dark:text-gray-400">
                   Paste the posting. We will match your resume to what they are looking for.
                 </p>
-                <Surface variant="inset" className="mt-4 rounded-xl px-4 py-3">
+                <Surface variant="inset" className="relative mt-4 rounded-xl px-4 py-3">
+                  {jdText.trim().length > 0 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-2 top-2 h-8 w-8 rounded-lg text-gray-500 hover:bg-black/[0.06] hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
+                      aria-label="Clear job description"
+                      title="Clear"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setJdText("")}
+                    >
+                      <Eraser />
+                    </Button>
+                  )}
                   <textarea
                     rows={9}
                     placeholder="Paste the full job description here…"
                     value={jdText}
                     onChange={(e) => setJdText(e.target.value)}
-                    className="w-full resize-none bg-transparent text-sm leading-relaxed text-gray-900 placeholder:text-gray-400 focus:outline-none dark:text-gray-100 dark:placeholder:text-gray-500"
+                    className="w-full resize-none bg-transparent pr-10 text-sm leading-relaxed text-gray-900 placeholder:text-gray-400 focus:outline-none dark:text-gray-100 dark:placeholder:text-gray-500"
                   />
                 </Surface>
                 <Button
                   type="button"
-                  variant="cta"
+                  variant="secondary"
+                  size="sm"
                   onClick={handleEdit}
                   disabled={!jdText.trim() || loading}
-                  className="mx-auto mt-4 h-9 w-28 shrink-0 px-1.5 py-0 text-center text-sm font-semibold leading-none"
+                  className="mx-auto mt-4 shrink-0 rounded-btn px-4 py-2 text-sm font-semibold"
                 >
+                  <Sparkles data-icon="inline-start" />
                   {loading ? "Tailoring…" : "Tailor"}
                 </Button>
               </div>
 
-              <div className="h-px bg-gray-200/60 dark:bg-white/10" />
+              {/* Divider: darker in light so it’s visible on pale canvas */}
+              <div className="h-px bg-black/10 dark:bg-white/10" />
 
               {loading && (
                 <div className="flex flex-col items-center justify-center py-14">
@@ -454,7 +472,7 @@ export default function Editor() {
           </div>
 
           {(import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV && (
-            <div className="border-t border-gray-200/60 px-6 py-2 dark:border-white/10">
+            <div className="border-t border-white/20 px-6 py-2 dark:border-white/10">
               <Button
                 type="button"
                 variant="link"
@@ -470,7 +488,7 @@ export default function Editor() {
         </Surface>
 
         <Surface variant="panel" className="flex w-[min(44vw,520px)] shrink-0 flex-col overflow-hidden">
-          <div className="relative min-h-0 flex-1 bg-white/30 dark:bg-white/[0.03]">
+          <div className="relative min-h-0 flex-1 bg-transparent dark:bg-white/[0.03]">
             {previewSrc && (
               <object
                 key={previewSrc}
@@ -509,7 +527,7 @@ export default function Editor() {
             )}
           </div>
 
-          <div className="shrink-0 space-y-2.5 border-t border-gray-200/60 px-3 py-3 dark:border-white/10">
+          <div className="shrink-0 space-y-2.5 border-t border-white/25 px-3 py-3 dark:border-white/10">
             {overflowWarning && (
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
                 {overflowWarning}
@@ -539,11 +557,13 @@ export default function Editor() {
 
             <Button
               type="button"
-              variant="cta"
+              variant="secondary"
+              size="sm"
               onClick={handleExportClick}
               disabled={!editedResume || exportLoading}
-              className="mx-auto h-9 w-28 shrink-0 px-1.5 py-0 text-center text-sm font-semibold leading-none"
+              className="mx-auto shrink-0 rounded-btn px-4 py-2 text-sm font-semibold"
             >
+              <Save data-icon="inline-start" />
               {exportLoading ? "Saving…" : "Save"}
             </Button>
 

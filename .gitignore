@@ -19,3 +19,6 @@ python/*.spec
 
 # OS
 .DS_Store
+
+# Local screenshots (reference only)
+UI SS/

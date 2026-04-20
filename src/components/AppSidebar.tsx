@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Cpu, FileText, UserRound } from "lucide-react";
 import { useConnection } from "../context/ConnectionContext";
 import { Button } from "../ui";
 import { cn } from "../ui/cn";
@@ -99,6 +99,9 @@ export default function AppSidebar({
   const levelKey = (config?.level as string) || "";
   const roleLine = `${role} · ${LEVEL_LABELS[levelKey] || levelKey || "—"}`;
   const modelLine = formatModelLine(config?.modelConfig as Record<string, string>);
+  const modelParts = modelLine.split("·").map((s) => s.trim());
+  const modelProvider = modelParts[0] || "Model";
+  const modelName = modelParts.slice(1).join(" · ").trim();
 
   const connectionDot =
     backendReady && !backendConnecting ? (
@@ -134,7 +137,7 @@ export default function AppSidebar({
   return (
     <aside
       className={cn(
-        "flex shrink-0 flex-col border-r border-gray-200/70 bg-white/30 backdrop-blur-xl transition-[width] duration-200 ease-out dark:border-white/10 dark:bg-white/[0.04]",
+        "flex shrink-0 flex-col border-r border-white/50 bg-[rgba(248,252,255,0.52)] shadow-[inset_-1px_0_0_rgba(255,255,255,0.45)] backdrop-blur-xl backdrop-saturate-110 transition-[width] duration-200 ease-out dark:border-white/10 dark:bg-white/[0.04] dark:backdrop-blur-none dark:backdrop-saturate-100 dark:shadow-none",
         collapsed ? "w-[56px]" : "w-[220px]"
       )}
     >
@@ -180,7 +183,28 @@ export default function AppSidebar({
             </motion.div>
           </nav>
 
-          <div className="mt-auto flex flex-col items-center gap-2 border-t border-gray-200/70 px-2 py-4 dark:border-white/10">
+          <div className="mt-auto flex flex-col items-center gap-3 border-t border-gray-200/70 px-2 py-4 text-xs text-gray-500 dark:border-white/10 dark:text-gray-400">
+            {/* Match nav icon language: rounded icon button + label */}
+            <div className="pointer-events-none flex flex-col items-center gap-3 text-[11px] text-gray-600 dark:text-gray-400">
+              <div className="flex flex-col items-center gap-1.5">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl text-gray-700 dark:text-gray-200">
+                  <FileText className="h-5 w-5 shrink-0 opacity-80" />
+                </div>
+                <span className="max-w-[52px] truncate">{templateName}</span>
+              </div>
+              <div className="flex flex-col items-center gap-1.5">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl text-gray-700 dark:text-gray-200">
+                  <UserRound className="h-5 w-5 shrink-0 opacity-80" />
+                </div>
+                <span className="max-w-[52px] truncate">{roleLine}</span>
+              </div>
+              <div className="flex flex-col items-center gap-1.5">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl text-gray-700 dark:text-gray-200">
+                  <Cpu className="h-5 w-5 shrink-0 opacity-80" />
+                </div>
+                <span className="max-w-[52px] truncate">{modelProvider}</span>
+              </div>
+            </div>
             <div className="flex justify-center" title={
               backendReady && !backendConnecting
                 ? "Preview ready"
@@ -239,23 +263,28 @@ export default function AppSidebar({
 
           <div className="mt-auto space-y-3 px-4 pb-5 pt-2 text-xs text-gray-500 dark:text-gray-400">
             <div className="pointer-events-none select-none space-y-2.5 leading-snug">
-              <div>
-                <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                  Template
-                </span>
-                <span className="text-sm font-normal text-gray-800 dark:text-gray-200">{templateName}</span>
+              <div className="flex items-start gap-2">
+                <FileText className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
+                <div className="min-w-0">
+                  <span className="block truncate text-sm font-normal text-gray-800 dark:text-gray-200">{templateName}</span>
+                </div>
               </div>
-              <div>
-                <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                  Role
-                </span>
-                <span className="text-sm text-gray-700 dark:text-gray-300">{roleLine}</span>
+              <div className="flex items-start gap-2">
+                <UserRound className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
+                <div className="min-w-0">
+                  <span className="block truncate text-sm text-gray-700 dark:text-gray-300">{roleLine}</span>
+                </div>
               </div>
-              <div>
-                <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                  Model
-                </span>
-                <span className="line-clamp-2 text-sm text-gray-700 dark:text-gray-300">{modelLine}</span>
+              <div className="flex items-start gap-2">
+                <Cpu className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
+                <div className="min-w-0">
+                  <span className="truncate text-sm text-gray-700 dark:text-gray-300">{modelProvider}</span>
+                  {modelName ? (
+                    <span className="mt-0.5 block line-clamp-2 text-[11px] text-gray-500/90 dark:text-gray-400">
+                      {modelName}
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-2 border-t border-gray-200/60 pt-3 dark:border-white/10">

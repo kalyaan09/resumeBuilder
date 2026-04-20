@@ -3,16 +3,15 @@
 @tailwind utilities;
 
 @layer base {
-  /* Inter everywhere: hierarchy = size/weight/color, not a second UI font */
   html {
     @apply antialiased font-sans;
   }
 
   body {
-    @apply font-sans text-gray-900 transition-colors duration-200 dark:bg-[#121214] dark:text-gray-100;
-    /* Base wash matches .app-canvas so routes without canvas / overscroll don’t flash flat gray */
-    background-color: #eef1f6;
-    background-image: linear-gradient(168deg, #e8f1ff 0%, #f2f7fd 28%, #f6f8fb 58%, #eef1f6 100%);
+    @apply font-sans text-gray-900 transition-colors duration-200 dark:text-gray-100;
+    /* Light: visible cool tint so glass has something to blur */
+    background-color: #e2ebfb;
+    background-image: linear-gradient(168deg, #d8e6ff 0%, #e8f1ff 32%, #f0f4fb 58%, #e8ecf4 100%);
     background-attachment: fixed;
   }
 
@@ -26,23 +25,40 @@
   }
 }
 
-@layer utilities {
-  /* Dona-like: airy sky wash + corner blooms + soft floor (readable with glass panels) */
-  .app-canvas {
-    background:
-      radial-gradient(120% 85% at 50% -18%, rgba(147, 197, 253, 0.42), transparent 58%),
-      radial-gradient(720px 520px at 96% 6%, rgba(125, 211, 252, 0.32), transparent 56%),
-      radial-gradient(640px 480px at 4% 92%, rgba(199, 210, 254, 0.26), transparent 54%),
-      radial-gradient(ellipse 110% 55% at 50% 100%, rgba(248, 250, 252, 0.85), transparent 72%),
-      linear-gradient(168deg, #e8f1ff 0%, #f2f7fd 28%, #f6f8fb 58%, #eef1f6 100%);
-  }
+/* Light: sky/lavender — a touch softer behind glass */
+html:not(.dark) .app-canvas {
+  background:
+    radial-gradient(125% 92% at 50% -22%, rgba(96, 165, 250, 0.3), transparent 56%),
+    radial-gradient(780px 520px at 98% 4%, rgba(125, 211, 252, 0.22), transparent 54%),
+    radial-gradient(680px 480px at 2% 90%, rgba(196, 181, 253, 0.16), transparent 54%),
+    radial-gradient(ellipse 120% 58% at 50% 100%, rgba(255, 255, 255, 0.45), transparent 72%),
+    linear-gradient(168deg, #dae6fc 0%, #e8f1ff 24%, #f0f4fb 52%, #e6ebf3 100%);
+}
 
-  .dark .app-canvas {
-    background:
-      radial-gradient(115% 80% at 50% -16%, rgba(59, 130, 246, 0.24), transparent 58%),
-      radial-gradient(700px 500px at 94% 8%, rgba(56, 189, 248, 0.16), transparent 56%),
-      radial-gradient(620px 440px at 6% 90%, rgba(99, 102, 241, 0.14), transparent 54%),
-      radial-gradient(ellipse 100% 50% at 50% 100%, rgba(0, 0, 0, 0.35), transparent 68%),
-      linear-gradient(168deg, #0d0d10 0%, #16161a 48%, #1c1c1e 100%);
-  }
+html.dark .app-canvas {
+  background:
+    radial-gradient(115% 80% at 50% -16%, rgba(59, 130, 246, 0.24), transparent 58%),
+    radial-gradient(700px 500px at 94% 8%, rgba(56, 189, 248, 0.16), transparent 56%),
+    radial-gradient(620px 440px at 6% 90%, rgba(99, 102, 241, 0.14), transparent 54%),
+    radial-gradient(ellipse 100% 50% at 50% 100%, rgba(0, 0, 0, 0.35), transparent 68%),
+    linear-gradient(168deg, #0d0d10 0%, #16161a 48%, #1c1c1e 100%);
+}
+
+/* Light: subtle glass — dialed back; left bar uses Tailwind in AppSidebar */
+html:not(.dark) [data-surface="panel"] {
+  background-color: rgba(255, 255, 255, 0.58) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(1.1) !important;
+  backdrop-filter: blur(22px) saturate(1.1) !important;
+}
+
+html:not(.dark) [data-surface="rail"] {
+  background-color: rgba(255, 255, 255, 0.52) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(1.08) !important;
+  backdrop-filter: blur(18px) saturate(1.08) !important;
+}
+
+html:not(.dark) [data-surface="inset"] {
+  background-color: rgba(255, 255, 255, 0.72) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(1.06) !important;
+  backdrop-filter: blur(12px) saturate(1.06) !important;
 }

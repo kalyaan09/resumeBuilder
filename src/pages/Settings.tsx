@@ -7,6 +7,7 @@ import { getApiKey, setApiKey } from "../lib/secureStore";
 import { readConfig, writeConfig, readResume, writeResume } from "../lib/persistenceStore";
 import { applyTheme, Theme } from "../lib/themeStore";
 import { Button, Modal, SegmentedControl, Surface } from "../ui";
+import { Save, Sparkles } from "lucide-react";
 import { cn } from "../ui/cn";
 
 const SIDECAR = "http://localhost:8000";
@@ -34,6 +35,20 @@ const SETTINGS_NAV: { id: SettingsNavId; label: string; danger?: boolean }[] = [
   { id: "appearance", label: "Appearance" },
   { id: "danger", label: "Danger zone", danger: true },
 ];
+
+/** Match AppSidebar Editor/Settings nav: filled pill when active, ghost when idle. */
+function settingsNavItemClass(isActive: boolean, danger?: boolean) {
+  return cn(
+    "h-auto w-full justify-start rounded-xl px-3 py-2.5 text-left text-sm font-medium",
+    danger
+      ? isActive
+        ? "bg-red-500/12 text-red-900 shadow-sm dark:bg-red-500/18 dark:text-red-100"
+        : "text-red-600 hover:bg-red-50/70 dark:text-red-400 dark:hover:bg-red-950/30"
+      : isActive
+        ? "bg-black/[0.07] text-gray-900 shadow-sm dark:bg-white/[0.12] dark:text-white"
+        : "text-gray-700 dark:text-gray-300"
+  );
+}
 
 interface Suggestion {
   section: string;
@@ -283,15 +298,9 @@ export default function Settings() {
                 <Button
                   key={item.id}
                   type="button"
-                  variant={activeNav === item.id ? "secondary" : "ghost"}
+                  variant="ghost"
                   onClick={() => setActiveNav(item.id)}
-                  className={cn(
-                    "h-auto w-full justify-start rounded-full px-3 py-2.5 text-left text-sm font-medium",
-                    item.danger &&
-                      activeNav !== item.id &&
-                      "text-red-600 hover:bg-red-50/70 dark:text-red-400 dark:hover:bg-red-950/30",
-                    item.danger && activeNav === item.id && "border-red-200/80 bg-red-50/90 text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200"
-                  )}
+                  className={settingsNavItemClass(activeNav === item.id, item.danger)}
                 >
                   <span className="flex w-full items-center justify-between gap-2">
                     {item.label}
@@ -326,9 +335,23 @@ export default function Settings() {
                   <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{THEME_LABELS[currentTheme] || "System"}</p>
                 )}
               </div>
-              <Button type="button" onClick={handleSaveConfig} disabled={!configDirty || configSaving} className="shrink-0">
-                {configSaved ? "Saved" : configSaving ? "Saving…" : "Save changes"}
-              </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button type="button" variant="secondary" size="sm" className="shrink-0">
+                  <Sparkles data-icon="inline-start" />
+                  Demo
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleSaveConfig}
+                  disabled={!configDirty || configSaving}
+                  className="shrink-0"
+                >
+                  <Save data-icon="inline-start" />
+                  {configSaved ? "Saved" : configSaving ? "Saving…" : "Save"}
+                </Button>
+              </div>
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">

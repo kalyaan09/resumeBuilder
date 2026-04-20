@@ -3,7 +3,21 @@ import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "./cn";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-btn text-sm font-medium transition-all duration-150 focus-visible:outline-none focus-visible:shadow-focus disabled:pointer-events-none disabled:opacity-40 active:scale-[0.98]",
+  [
+    "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-btn text-sm font-medium transition-all duration-150",
+    "focus-visible:outline-none focus-visible:shadow-focus disabled:pointer-events-none disabled:opacity-40 active:scale-[0.98]",
+    /**
+     * Icon ergonomics:
+     * - default size for any direct svg icon
+     * - optional data-icon for optical alignment (like your reference)
+     */
+    /**
+     * Use descendant selectors (not direct child) so icons work even if wrapped
+     * by other components/spans.
+     */
+    "[&_svg]:h-4 [&_svg]:w-4 [&_svg]:shrink-0",
+    "[&_[data-icon='inline-start']]:-ml-0.5 [&_[data-icon='inline-end']]:-mr-0.5",
+  ].join(" "),
   {
     variants: {
       variant: {

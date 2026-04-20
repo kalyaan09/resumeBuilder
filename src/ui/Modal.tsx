@@ -43,11 +43,12 @@ export function Modal({
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           <motion.div
+            data-surface="panel"
             initial={{ opacity: 0, scale: 0.97 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ type: "spring", stiffness: 380, damping: 28 }}
             className={cn(
-              "flex max-h-[94vh] flex-col overflow-hidden rounded-2xl border border-gray-200/60 bg-surface-glass shadow-glass backdrop-blur-xl dark:border-white/10 dark:bg-surface-glass-dark dark:shadow-glass-dark",
+              "flex max-h-[94vh] flex-col overflow-hidden rounded-2xl border border-white/50 bg-surface-glass shadow-glass backdrop-blur-xl dark:border-white/10 dark:bg-surface-glass-dark dark:shadow-glass-dark dark:backdrop-blur-2xl",
               dense ? "min-h-0" : "min-h-[520px]",
               contentClassName
             )}

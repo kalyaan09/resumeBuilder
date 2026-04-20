@@ -23,13 +23,13 @@ export default {
           sidebar: "#E8E8ED",
           card: "#ffffff",
         },
-        /** Glass tints read through blur; sky/slate tints tie panels to .app-canvas */
+        /** Light: low-alpha fill so backdrop-blur shows canvas (solid white = alpha too high) */
         surface: {
-          glass: "rgba(232, 241, 255, 0.52)",
+          glass: "rgba(255, 255, 255, 0.58)",
           "glass-dark": "rgba(32, 36, 48, 0.78)",
-          rail: "rgba(255, 255, 255, 0.45)",
+          rail: "rgba(255, 255, 255, 0.52)",
           "rail-dark": "rgba(255, 255, 255, 0.045)",
-          inset: "rgba(255, 255, 255, 0.42)",
+          inset: "rgba(255, 255, 255, 0.72)",
           "inset-dark": "rgba(255, 255, 255, 0.06)",
         },
         ring: {
@@ -41,7 +41,7 @@ export default {
         card: "0 2px 14px rgba(15, 23, 42, 0.06)",
         "card-dark": "0 2px 18px rgba(0, 0, 0, 0.35)",
         glass:
-          "0 1px 0 rgba(255,255,255,0.6) inset, 0 10px 30px rgba(15,23,42,0.10), 0 2px 10px rgba(15,23,42,0.06)",
+          "0 1px 0 rgba(255,255,255,0.75) inset, 0 12px 36px rgba(15,23,42,0.08), 0 2px 12px rgba(15,23,42,0.05)",
         "glass-dark":
           "0 1px 0 rgba(255,255,255,0.06) inset, 0 14px 40px rgba(0,0,0,0.55), 0 2px 14px rgba(0,0,0,0.35)",
         /** Soft focus ring for premium controls */

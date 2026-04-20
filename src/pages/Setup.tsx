@@ -362,7 +362,9 @@ export default function Setup({ onComplete }: SetupProps) {
               />
               <Button
                 type="button"
-                className="w-full py-3 text-sm font-semibold"
+                variant="secondary"
+                size="sm"
+                className="w-full rounded-btn py-3 text-sm font-semibold"
                 onClick={async () => {
                   const prev = (await readConfig()) || {};
                   await writeConfig({ ...prev, theme: selectedTheme });
@@ -398,12 +400,14 @@ export default function Setup({ onComplete }: SetupProps) {
               )}
 
               <div className="flex gap-3">
-                <Button type="button" variant="secondary" className="flex-1" onClick={() => setPhase("theme")}>
+                <Button type="button" variant="secondary" size="sm" className="flex-1 rounded-btn" onClick={() => setPhase("theme")}>
                   Back
                 </Button>
                 <Button
                   type="button"
-                  className="flex-1"
+                  variant="secondary"
+                  size="sm"
+                  className="flex-1 rounded-btn"
                   disabled={!modelVerified || !modelConfig}
                   onClick={() => setPhase("info")}
                 >
