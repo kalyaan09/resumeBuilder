@@ -22,3 +22,7 @@ python/*.spec
 
 # Local screenshots (reference only)
 UI SS/
+env/
+src-tauri/binaries/
+src-tauri/target/
+python/__pycache__/
