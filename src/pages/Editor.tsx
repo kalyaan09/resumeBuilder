@@ -1,100 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Eraser, Save, Sparkles } from "lucide-react";
 import ResumeEditor from "../components/ResumeEditor";
 import AppSidebar from "../components/AppSidebar";
 import { getApiKey } from "../lib/secureStore";
-import { readConfig, readResume, writeConfig } from "../lib/persistenceStore";
-import { Button, Modal, SegmentedControl, Surface } from "../ui";
+import { readConfig, readShared, readProfileResume, writeConfig } from "../lib/persistenceStore";
+import { getEffectiveSectionOrder } from "../lib/sectionOrder";
+import { Button, Modal, SegmentedControl, Surface, TypographyH2, TypographyMuted } from "../ui";
+import { useProfiles } from "../context/ProfilesContext";
+import type { TransformersContext } from "../lib/sidecarApi";
+import { detectBestProfile, detectCompanyType, detectSeniority, extractKeywords, weakBulletIndicesFromResume } from "../lib/jdAnalysis";
 
 const SIDECAR = "http://localhost:8000";
 const FONT_SIZES = [9, 9.5, 10, 10.5, 11];
-
-const SAMPLE_RESUME = {
-  basics: {
-    name: "Alex Johnson",
-    email: "alex.johnson@email.com",
-    phone: "(555) 867-5309",
-    location: "San Francisco, CA",
-    linkedin: "linkedin.com/in/alexjohnson",
-    github: "github.com/alexjohnson",
-    portfolio: "alexjohnson.dev",
-  },
-  summary:
-    "Software Engineer with 4 years of experience building scalable distributed systems " +
-    "and data pipelines. Passionate about developer tooling, ML infrastructure, and " +
-    "open-source contributions. Led cross-functional teams shipping features used by millions.",
-  experience: [
-    {
-      company: "Stripe",
-      title: "Software Engineer II",
-      location: "San Francisco, CA",
-      startDate: "June 2022",
-      endDate: "Present",
-      bullets: [
-        "Designed and shipped a real-time fraud detection pipeline processing 50K transactions/sec, reducing chargebacks by 23% ($4M/year saved).",
-        "Led migration of legacy monolith services to Kubernetes microservices, cutting p99 latency from 800ms to 120ms.",
-        "Mentored 3 junior engineers and conducted 60+ technical interviews, improving team hiring bar.",
-      ],
-    },
-    {
-      company: "Amazon Web Services",
-      title: "Software Development Engineer",
-      location: "Seattle, WA",
-      startDate: "July 2020",
-      endDate: "May 2022",
-      bullets: [
-        "Built an internal A/B testing framework adopted by 15 teams, enabling 200+ concurrent experiments.",
-        "Optimized DynamoDB query patterns reducing read costs by 40% across 3 high-traffic services.",
-        "Implemented CI/CD pipelines using CodePipeline and CloudFormation, cutting deploy time from 45 min to 8 min.",
-      ],
-    },
-  ],
-  education: [
-    {
-      institution: "University of California, Berkeley",
-      degree: "Bachelor of Science",
-      field: "Electrical Engineering & Computer Science",
-      endDate: "May 2020",
-      gpa: "3.8",
-    },
-  ],
-  skills: [
-    { category: "Languages", items: ["Python", "Go", "Java", "TypeScript", "SQL"] },
-    { category: "Frameworks", items: ["FastAPI", "React", "gRPC", "Kafka", "Spark"] },
-    { category: "Cloud & DevOps", items: ["AWS", "GCP", "Kubernetes", "Terraform", "Docker"] },
-    { category: "Databases", items: ["PostgreSQL", "DynamoDB", "Redis", "BigQuery"] },
-  ],
-  projects: [
-    {
-      name: "OpenTelemetry Contrib — Kafka Receiver",
-      startDate: "Jan 2023",
-      endDate: "Present",
-      bullets: [
-        "Authored Kafka metrics receiver merged into the official OTel Collector contrib repo (500+ GitHub stars).",
-        "Reduced instrumentation boilerplate for Kafka consumers from 200 lines to a single config block.",
-      ],
-    },
-    {
-      name: "ResumeCraft — AI Resume Tailoring Tool",
-      startDate: "Aug 2023",
-      endDate: "Dec 2023",
-      bullets: [
-        "Built a local-first Tauri + FastAPI desktop app that uses LLMs to tailor resumes to job descriptions.",
-        "Integrated Playwright PDF export with 4 professional templates; used by 1,200+ job seekers.",
-      ],
-    },
-  ],
-  certifications: [
-    { name: "AWS Certified Solutions Architect – Professional", issuer: "Amazon", date: "2022" },
-    { name: "Google Cloud Professional Data Engineer", issuer: "Google", date: "2023" },
-  ],
-  publications: [],
-  awards: [],
-  volunteer: [],
-  languages: [],
-};
 
 function filterSections(
   resume: Record<string, unknown>,
@@ -112,14 +31,19 @@ function filterSections(
 
 export default function Editor() {
   const navigate = useNavigate();
+  const { profiles, activeProfileId, activeProfileName, switchTo } = useProfiles();
 
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
-  const [masterResume, setMasterResume] = useState<Record<string, unknown> | null>(null);
+  const [sharedData, setSharedData] = useState<Record<string, unknown> | null>(null);
+  const [profileResume, setProfileResume] = useState<Record<string, unknown> | null>(null);
   const [masterSections, setMasterSections] = useState<Record<string, unknown> | null>(null);
   const [editedSections, setEditedSections] = useState<Record<string, unknown> | null>(null);
   const [editedResume, setEditedResume] = useState<Record<string, unknown> | null>(null);
 
   const [jdText, setJdText] = useState("");
+  const [profileToast, setProfileToast] = useState<string | null>(null);
+  const [transformersContext, setTransformersContext] = useState<TransformersContext>({});
+  const [jdAiLoading, setJdAiLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
@@ -135,26 +59,45 @@ export default function Editor() {
   const [overflowWarning, setOverflowWarning] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([readConfig(), readResume()])
-      .then(([cfg, resume]) => {
+    (async () => {
+      try {
+        const [cfg, shared] = await Promise.all([readConfig(), readShared()]);
         setConfig(cfg);
+        setSharedData(shared);
         const dfSize = (cfg?.defaultFontSize as number) || 10;
         setDefaultFontSize(dfSize);
         setFontSize(dfSize);
-        setMasterResume(resume);
 
-        if (cfg && resume) {
-          const order = (cfg.sectionOrder as string[]) || Object.keys(resume);
+        const activeId = (cfg?.activeProfile as string) || null;
+        const profile = activeId ? await readProfileResume(activeId) : null;
+        setProfileResume(profile);
+
+        if (cfg && profile) {
+          const order = getEffectiveSectionOrder(cfg, profile);
           const active = (cfg.activeSections as string[]) || order;
-          setMasterSections(filterSections(resume, order, active));
+          setMasterSections(filterSections(profile, order, active));
         }
-      })
-      .finally(() => setDataLoading(false));
+      } finally {
+        setDataLoading(false);
+      }
+    })();
   }, []);
+
+  // When activeProfileId changes externally (Settings switch, auto-detection),
+  // reload profile data so profileResume stays in sync and the editor shows the correct content.
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    if (!activeProfileId) return;
+    loadProfileData(activeProfileId);
+  }, [activeProfileId]);
 
   useEffect(() => {
     if (!editedResume || !config) return;
-    const order = (config.sectionOrder as string[]) || Object.keys(editedResume);
+    const order = getEffectiveSectionOrder(config, editedResume);
     const active = (config.activeSections as string[]) || order;
     setEditedSections(filterSections(editedResume, order, active));
   }, [editedResume, config]);
@@ -172,7 +115,7 @@ export default function Editor() {
           body: JSON.stringify({
             resume: editedResume,
             template: (config.template as string) || "jake",
-            section_order: (config.sectionOrder as string[]) || [],
+            section_order: getEffectiveSectionOrder(config, editedResume),
             active_sections: (config.activeSections as string[]) || [],
             font_size: fontSize,
           }),
@@ -204,6 +147,19 @@ export default function Editor() {
     };
   }, [editedResume, fontSize, config]);
 
+  async function loadProfileData(profileId: string) {
+    const [shared, profile] = await Promise.all([readShared(), readProfileResume(profileId)]);
+    setSharedData(shared);
+    setProfileResume(profile);
+    setEditedResume(null);
+    setEditedSections(null);
+    if (config && profile) {
+      const order = getEffectiveSectionOrder(config, profile);
+      const active = (config.activeSections as string[]) || order;
+      setMasterSections(filterSections(profile, order, active));
+    }
+  }
+
   async function fullLlmConfig() {
     const base = (config?.modelConfig as Record<string, string>) || {};
     const api_key = await getApiKey(base.provider || "").catch(() => "");
@@ -211,20 +167,28 @@ export default function Editor() {
   }
 
   async function handleEdit() {
-    if (!jdText.trim() || !masterResume) return;
+    if (!jdText.trim() || !profileResume) return;
     setLoading(true);
     setError(null);
 
     try {
+      const sharedBasics = {
+        basics: sharedData?.basics ?? {},
+        education: sharedData?.education ?? [],
+      };
+
       const res = await fetch(`${SIDECAR}/edit-resume`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           jd_text: jdText,
-          master_resume: masterResume,
+          profile_resume: profileResume,
+          profile_name: activeProfileName || "",
+          basics: sharedBasics,
+          shared_education: (sharedData?.education as unknown[]) ?? [],
           user_instructions: (config?.userInstructions as string) || "",
-          research_text: "",
           llm_config: await fullLlmConfig(),
+          transformers_context: transformersContext,
         }),
       });
 
@@ -234,7 +198,8 @@ export default function Editor() {
       }
 
       const data = await res.json();
-      setEditedResume(data.resume);
+      // sharedData has basics + education; data.resume has LLM-tailored profile sections
+      setEditedResume({ ...(sharedData ?? {}), ...data.resume });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to edit resume");
     } finally {
@@ -247,8 +212,9 @@ export default function Editor() {
   }
 
   function handleResetSection(key: string) {
-    if (masterResume?.[key] !== undefined) {
-      setEditedResume((prev) => (prev ? { ...prev, [key]: masterResume[key] } : prev));
+    const original = profileResume?.[key] ?? sharedData?.[key];
+    if (original !== undefined) {
+      setEditedResume((prev) => (prev ? { ...prev, [key]: original } : prev));
     }
   }
 
@@ -286,11 +252,15 @@ export default function Editor() {
         body: JSON.stringify({
           resume: editedResume,
           template: (config?.template as string) || "jake",
-          section_order: (config.sectionOrder as string[]) || [],
+          section_order: getEffectiveSectionOrder(config, editedResume),
           active_sections: (config.activeSections as string[]) || [],
           save_path: (config?.savePath as string) || "~/Documents/Resumes",
           font_size: sizeToUse,
           auto_fit: !fontSizeManual,
+          profile_id: activeProfileId || "",
+          profile_name: activeProfileName || "",
+          jd_text: jdText,
+          transformers_context: transformersContext,
         }),
       });
 
@@ -353,11 +323,55 @@ export default function Editor() {
     }
   }
 
-  function handleLoadSample() {
-    setEditedResume(SAMPLE_RESUME);
-    setError(null);
-    setPreviewSrc(null);
-  }
+  const showProfileToast = (msg: string) => {
+    setProfileToast(msg);
+    window.setTimeout(() => setProfileToast((cur) => (cur === msg ? null : cur)), 3000);
+  };
+
+  useEffect(() => {
+    if (profiles.length <= 1) return;
+    if (jdText.trim().length <= 50) return;
+    let cancelled = false;
+    setJdAiLoading(true);
+    const t = window.setTimeout(async () => {
+      try {
+        const matchResult = await detectBestProfile(jdText, profiles);
+        if (cancelled) return;
+
+        const detectedRole = matchResult.detectedRole;
+        const match = matchResult.bestProfile;
+
+        const keywords = extractKeywords(jdText, 10);
+        const seniority = detectSeniority(jdText);
+        const company_type = detectCompanyType(jdText);
+        const weak_bullet_indices = weakBulletIndicesFromResume(jdText, profileResume, 6);
+        setTransformersContext({
+          detected_role: match?.name ?? matchResult.classifierTopLabel ?? detectedRole ?? undefined,
+          keywords,
+          must_include_keywords: keywords.slice(0, 10),
+          seniority,
+          company_type,
+          weak_bullet_indices,
+        });
+
+        if (match?.id && match.id !== activeProfileId) {
+          await switchTo(match.id);
+          await loadProfileData(match.id);
+          showProfileToast(`Switching to ${match.name} profile`);
+        }
+      } catch {
+        // ignore JD analysis errors (offline / model download blocked)
+      } finally {
+        if (!cancelled) setJdAiLoading(false);
+      }
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+      setJdAiLoading(false);
+    };
+  }, [jdText, profiles, activeProfileId, activeProfileName, switchTo, profileResume]);
 
   if (dataLoading) {
     return (
@@ -367,16 +381,18 @@ export default function Editor() {
     );
   }
 
-  if (!config?.setupComplete || !masterResume) {
+  if (!config?.setupComplete || !profileResume) {
     return (
       <div className="app-canvas flex min-h-screen flex-col">
         <div className="flex flex-1 items-center justify-center p-6">
           <Surface variant="solid" className="w-full max-w-md space-y-4 p-10 text-center">
             <div className="text-4xl opacity-80">📄</div>
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">No master resume found</h2>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
+            <TypographyH2 className="border-0 pb-0 text-xl text-gray-900 dark:text-gray-100">
+              No master resume found
+            </TypographyH2>
+            <TypographyMuted className="text-sm text-gray-500 dark:text-gray-400">
               Finish setup to import your resume and start tailoring it to each role.
-            </p>
+            </TypographyMuted>
             <Button type="button" onClick={() => navigate("/setup")} className="mt-2 w-full">
               Go to setup
             </Button>
@@ -395,10 +411,57 @@ export default function Editor() {
           <div className="flex-1 overflow-y-auto px-6 py-6">
             <div className="mx-auto max-w-3xl space-y-8">
               <div>
-                <h2 className="text-base font-semibold tracking-tight text-gray-900 dark:text-gray-100">Job description</h2>
-                <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-gray-600 dark:text-gray-400">
+                {profiles.length > 0 && (
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="relative">
+                        <select
+                          value={activeProfileId || ""}
+                          onChange={async (e) => {
+                            const next = e.target.value;
+                            if (next && next !== activeProfileId) {
+                              try {
+                                await switchTo(next);
+                                await loadProfileData(next);
+                              } catch {
+                                // non-fatal
+                              }
+                            }
+                          }}
+                          className="h-9 rounded-xl border border-gray-200/80 bg-white/70 px-3 pr-8 text-sm font-medium text-gray-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] backdrop-blur-sm focus:outline-none focus-visible:shadow-focus dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100"
+                        >
+                          {profiles.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400">
+                          ▾
+                        </span>
+                      </div>
+                      {jdAiLoading ? (
+                        <TypographyMuted className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
+                          <span className="inline-block h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-brand-500/80" aria-hidden />
+                          Auto-detecting profile…
+                        </TypographyMuted>
+                      ) : null}
+                    </div>
+
+                    {profiles.length > 1 && profileToast ? (
+                      <div className="truncate text-xs text-gray-600 dark:text-gray-300">{profileToast}</div>
+                    ) : null}
+                  </div>
+                )}
+                {profiles.length > 1 ? (
+                  <TypographyMuted className="mb-4 w-full max-w-none text-left text-[11px] leading-snug text-gray-500 dark:text-gray-400">
+                    The profile chosen from your job description is a best guess and may be wrong. Please cross-check the profile menu before tailoring.
+                  </TypographyMuted>
+                ) : null}
+                <h2 className="text-[15px] font-semibold tracking-tight text-gray-900 dark:text-gray-100">Job description</h2>
+                <TypographyMuted className="mt-1.5 max-w-prose text-sm leading-relaxed text-gray-600 dark:text-gray-400">
                   Paste the posting. We will match your resume to what they are looking for.
-                </p>
+                </TypographyMuted>
                 <Surface variant="inset" className="relative mt-4 rounded-xl px-4 py-3">
                   {jdText.trim().length > 0 && (
                     <Button
@@ -422,17 +485,19 @@ export default function Editor() {
                     className="w-full resize-none bg-transparent pr-10 text-sm leading-relaxed text-gray-900 placeholder:text-gray-400 focus:outline-none dark:text-gray-100 dark:placeholder:text-gray-500"
                   />
                 </Surface>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleEdit}
-                  disabled={!jdText.trim() || loading}
-                  className="mx-auto mt-4 shrink-0 rounded-btn px-4 py-2 text-sm font-semibold"
-                >
-                  <Sparkles data-icon="inline-start" />
-                  {loading ? "Tailoring…" : "Tailor"}
-                </Button>
+                <div className="mx-auto mt-4 flex w-full max-w-md flex-col items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleEdit}
+                    disabled={!jdText.trim() || loading || jdAiLoading}
+                    className="shrink-0 rounded-btn px-4 py-2 text-sm font-semibold"
+                  >
+                    <Sparkles data-icon="inline-start" />
+                    {loading ? "Tailoring…" : jdAiLoading ? "Auto-detecting…" : "Tailor"}
+                  </Button>
+                </div>
               </div>
 
               {/* Divider: darker in light so it’s visible on pale canvas */}
@@ -441,7 +506,7 @@ export default function Editor() {
               {loading && (
                 <div className="flex flex-col items-center justify-center py-14">
                   <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
-                  <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Shaping your experience to fit this role…</p>
+                  <TypographyMuted className="mt-4">Shaping your experience to fit this role…</TypographyMuted>
                 </div>
               )}
 
@@ -457,7 +522,7 @@ export default function Editor() {
 
               {editedSections && !loading && (
                 <div className="space-y-6">
-                  <h2 className="text-base font-semibold tracking-tight text-gray-900 dark:text-gray-100">Edited resume</h2>
+                  <h2 className="text-[15px] font-semibold tracking-tight text-gray-900 dark:text-gray-100">Edited resume</h2>
                   <ResumeEditor
                     sections={editedSections}
                     originalSections={masterSections}
@@ -471,20 +536,6 @@ export default function Editor() {
             </div>
           </div>
 
-          {(import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV && (
-            <div className="border-t border-white/20 px-6 py-2 dark:border-white/10">
-              <Button
-                type="button"
-                variant="link"
-                size="sm"
-                onClick={handleLoadSample}
-                className="h-auto p-0 text-xs text-amber-700 decoration-dashed dark:text-amber-400"
-                title="Development only"
-              >
-                Load sample resume
-              </Button>
-            </div>
-          )}
         </Surface>
 
         <Surface variant="panel" className="flex w-[min(44vw,520px)] shrink-0 flex-col overflow-hidden">
@@ -512,7 +563,7 @@ export default function Editor() {
                 >
                   <div className="text-center">
                     <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-gray-400 border-t-brand-600" />
-                    <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">Updating preview…</p>
+                    <TypographyMuted className="mt-3">Updating preview…</TypographyMuted>
                   </div>
                 </motion.div>
               )}
@@ -528,15 +579,8 @@ export default function Editor() {
           </div>
 
           <div className="shrink-0 space-y-2.5 border-t border-white/25 px-3 py-3 dark:border-white/10">
-            {overflowWarning && (
-              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-                {overflowWarning}
-              </p>
-            )}
             <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
-              <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                Font size
-              </span>
+              <span className="shrink-0 text-xs font-medium text-gray-500 dark:text-gray-400">Font Size</span>
               <div className="flex min-w-0 max-w-full items-center gap-1.5">
                 <SegmentedControl
                   className="min-w-0 max-w-[min(268px,100%)]"
@@ -555,17 +599,27 @@ export default function Editor() {
               )}
             </div>
 
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={handleExportClick}
-              disabled={!editedResume || exportLoading}
-              className="mx-auto shrink-0 rounded-btn px-4 py-2 text-sm font-semibold"
-            >
-              <Save data-icon="inline-start" />
-              {exportLoading ? "Saving…" : "Save"}
-            </Button>
+            <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={handleExportClick}
+                disabled={!editedResume || exportLoading}
+                className="shrink-0 rounded-btn px-4 py-2 text-sm font-semibold sm:self-auto"
+              >
+                <Save data-icon="inline-start" />
+                {exportLoading ? "Saving…" : "Save"}
+              </Button>
+              {overflowWarning ? (
+                <div
+                  className="max-w-[min(520px,100%)] rounded-lg bg-amber-50 px-3 py-2 text-left text-[11px] leading-snug text-amber-900 dark:bg-amber-950/40 dark:text-amber-100"
+                  title={overflowWarning}
+                >
+                  {overflowWarning}
+                </div>
+              ) : null}
+            </div>
 
             {lastExportPath && (
               <div className="flex items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
@@ -584,26 +638,39 @@ export default function Editor() {
       <Modal
         open={fontSizeDialog}
         onOpenChange={setFontSizeDialog}
-        title="Font size changed"
+        title="Font Size Changed"
         className="w-[min(420px,94vw)]"
+        overlayClassName="bg-black/25 backdrop-blur-md"
         dense
+        surface={false}
+        contentClassName="rounded-3xl border-white/55 bg-white/80 shadow-[0_22px_70px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.08] dark:shadow-[0_28px_90px_rgba(0,0,0,0.55)]"
+        headerClassName="px-4 py-3"
+        bodyClassName="overflow-visible"
       >
         <div className="flex flex-col gap-4 px-5 pb-5 pt-2">
           <p className="text-sm text-gray-600 dark:text-gray-300">
-            You changed font size from <span className="font-semibold">{defaultFontSize}pt</span> to{" "}
+            You changed the font size from <span className="font-semibold">{defaultFontSize}pt</span> to{" "}
             <span className="font-semibold">{fontSize}pt</span>. Save this as your new default, or use it only for this export?
           </p>
-          <div className="flex gap-3">
-            <Button type="button" onClick={handleSaveAsDefault} className="flex-1">
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button type="button" onClick={handleSaveAsDefault} className="w-auto min-w-[8.5rem] px-4">
               Save as default
             </Button>
-            <Button type="button" variant="secondary" onClick={handleJustThisOnce} className="flex-1">
+            <Button type="button" variant="secondary" onClick={handleJustThisOnce} className="w-auto min-w-[8.5rem] px-4">
               Just this once
             </Button>
           </div>
-          <Button type="button" variant="ghost" size="sm" className="w-full text-xs text-gray-500" onClick={() => setFontSizeDialog(false)}>
-            Cancel
-          </Button>
+          <div className="flex justify-center">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 w-fit shrink-0 px-3 text-xs text-red-600 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950/35 dark:hover:text-red-300"
+              onClick={() => setFontSizeDialog(false)}
+            >
+              Cancel
+            </Button>
+          </div>
         </div>
       </Modal>
     </div>

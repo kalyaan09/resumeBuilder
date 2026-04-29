@@ -27,14 +27,14 @@ fn start_sidecar(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     let (mut rx, child) = app
         .shell()
         .sidecar("resume-sidecar")
-        .expect("resume-sidecar binary not found — run build-dmg.sh first")
+        .expect("resume-sidecar binary not found; run build-dmg.sh first")
         .spawn()?;
 
     // Leak the CommandChild handle so the process is not killed if Drop does so.
     // The OS terminates child processes when the Tauri app exits on macOS.
     std::mem::forget(child);
 
-    // Drain stdout/stderr asynchronously — required to prevent the sidecar
+    // Drain stdout/stderr asynchronously, required to prevent the sidecar
     // from blocking on a full pipe buffer.
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {

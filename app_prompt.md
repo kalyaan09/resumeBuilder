@@ -1,4 +1,4 @@
-# Resume Editor App — Build This For Me
+# Resume Editor App: Build This For Me
 
 ## What We're Building
 A local desktop resume editor app. User pastes a Job Description, the app uses an AI model to edit their resume, user can tweak it in-app, then exports as PDF saved to a chosen path.
@@ -6,7 +6,7 @@ A local desktop resume editor app. User pastes a Job Description, the app uses a
 ---
 
 ## Platform
-- **Mac only for now** — target macOS 13+ (Ventura and above)
+- **Mac only for now**, targeting macOS 13+ (Ventura and above)
 - Do NOT add any cross-platform abstractions yet
 - Use macOS-specific paths (`/Users/...`)
 - Assume Python sidecar runs on macOS
@@ -55,10 +55,10 @@ resume-editor/
 
 ## Onboarding Screen (Setup.tsx)
 First time the app launches, show a setup screen with:
-1. **User Instructions** — large textarea — how they like their resume written (tone, what to never cut, priorities)
-2. **Template Resume** — file upload — accepts `.docx` or `.tex`
-3. **Research File** — file upload (optional) — a text/doc file with background research about the user done by any LLM
-4. **Default Save Path** — folder picker for where PDFs get saved
+1. **User Instructions**: large textarea for how they like their resume written (tone, what to never cut, priorities)
+2. **Template Resume**: file upload that accepts `.docx` or `.tex`
+3. **Research File**: optional file upload, a text or doc file with background research about the user done by any LLM
+4. **Default Save Path**: folder picker for where PDFs get saved
 5. Save all this to a local config file using Tauri's store plugin. Once setup is complete, never show this screen again (unless user resets from Settings).
 
 ---
@@ -81,15 +81,15 @@ Store API keys securely using `tauri-plugin-store`. Never log or transmit keys a
 Show a **"Test Connection"** button next to each provider's config. When clicked:
 - Send a minimal test message: `"Reply with OK"` to the configured model
 - Show inline feedback:
-  - ✅ Green — "Connected! Model is responding"
-  - ❌ Red — show the actual error (invalid API key, model not found, Ollama not running, etc.)
-- For Ollama specifically, check if `http://localhost:11434` is reachable first and show: "Ollama is not running — start it with `ollama serve`" if it's down
+  - ✅ Green: "Connected! Model is responding"
+  - ❌ Red: show the actual error (invalid API key, model not found, Ollama not running, etc.)
+- For Ollama specifically, check if `http://localhost:11434` is reachable first and show: "Ollama is not running. Start it with `ollama serve`" if it's down
 - Do NOT let user proceed to the main app if no model is connected and tested
 
 ---
 
-## Python Sidecar — llm_client.py
-Build a single clean abstraction. Ollama, OpenRouter, and Groq are all OpenAI-compatible — reuse the same client, just swap `base_url` and `api_key`.
+## Python Sidecar: llm_client.py
+Build a single clean abstraction. Ollama, OpenRouter, and Groq are all OpenAI-compatible, so reuse the same client and swap `base_url` and `api_key`.
 
 ```python
 class LLMClient:
@@ -105,7 +105,7 @@ class LLMClient:
 
 ---
 
-## Python Sidecar — main.py (FastAPI)
+## Python Sidecar: main.py (FastAPI)
 Expose these endpoints, called by the Tauri frontend via HTTP:
 
 ### POST /parse-resume
@@ -113,7 +113,7 @@ Expose these endpoints, called by the Tauri frontend via HTTP:
 - For `.docx` → parse with python-docx
 - For `.tex` → extract plain text using Pandoc (`pandoc input.tex -t plain`)
 - Output: JSON with resume sections (summary, experience, education, skills, etc.)
-- Show a neutral info message to LaTeX users: "Your template formatting won't be preserved — output will be PDF"
+- Show a neutral info message to LaTeX users: "Your template formatting won't be preserved; output will be PDF"
 
 ### POST /edit-resume
 - Input: JD text, resume sections JSON, user instructions, research file content, model config
@@ -143,7 +143,7 @@ Rules:
 - Prioritize keywords and phrases from the JD naturally throughout
 - Keep bullet points achievement-focused with metrics where possible
 - Follow the user's personal instructions strictly
-- Return ONLY valid JSON matching the exact input schema — no commentary, no markdown
+- Return ONLY valid JSON matching the exact input schema with no commentary and no markdown
 - Every section must be present in output even if unchanged
 ```
 
@@ -153,9 +153,9 @@ Rules:
 Main flow after user pastes JD and hits "Edit My Resume":
 1. Show loading state while Python sidecar processes
 2. Render the edited resume section by section using `SectionBlock.tsx`
-3. Every section is **inline editable** — click to edit any bullet, heading, or text
-4. **"Re-ask AI"** button per section — user can type feedback and regenerate just that section
-5. **"Reset Section"** button — revert a section to original
+3. Every section is **inline editable**: click to edit any bullet, heading, or text
+4. **"Re-ask AI"** button per section so the user can type feedback and regenerate just that section
+5. **"Reset Section"** button to revert a section to original
 6. Top right: **"Export PDF"** button → calls `/export-pdf` → saves to default path (or lets user pick a new path)
 7. Show success toast with the file path when done
 
@@ -165,7 +165,7 @@ Main flow after user pastes JD and hits "Edit My Resume":
 - Python sidecar starts automatically when Tauri app launches (configure in tauri.conf.json as a sidecar)
 - All API keys stored encrypted via tauri-plugin-store, passed to Python sidecar per-request, never stored in Python
 - App should work fully offline if user picks Ollama
-- Handle errors gracefully — if AI call fails, show error inline with a retry button
+- Handle errors gracefully: if an AI call fails, show the error inline with a retry button
 - Config/settings persisted in `~/.resume-editor/config.json`
 
 ---

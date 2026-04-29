@@ -23,16 +23,16 @@ const buttonVariants = cva(
       variant: {
         primary: "bg-brand-600 text-white shadow-sm hover:bg-brand-700",
         secondary:
-          "border border-gray-300/90 bg-white/85 text-gray-900 shadow-sm backdrop-blur-sm hover:bg-white dark:border-white/12 dark:bg-white/10 dark:text-gray-100 dark:hover:bg-white/[0.14]",
+          "border border-gray-300/90 bg-white/85 text-gray-900 shadow-sm backdrop-blur-sm hover:bg-white hover:shadow-[0_8px_24px_rgba(15,23,42,0.08)] dark:border-white/12 dark:bg-white/10 dark:text-gray-100 dark:hover:bg-white/[0.14] dark:hover:shadow-[0_12px_34px_rgba(0,0,0,0.45)]",
         ghost:
           "text-gray-700 hover:bg-black/[0.05] dark:text-gray-200 dark:hover:bg-white/[0.08]",
         destructive:
           "border border-red-200/90 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-800/80 dark:bg-red-950/45 dark:text-red-300 dark:hover:bg-red-950/65",
-        /** Primary action without a heavy solid fill — border + brand text */
+        /** Primary action without a heavy solid fill: border plus brand text */
         outlinePrimary:
           "border border-brand-600 bg-white text-brand-600 shadow-sm hover:bg-brand-50 hover:border-brand-700 dark:border-brand-500 dark:bg-[#2C2C2E] dark:text-brand-400 dark:hover:bg-white/[0.08] dark:hover:border-brand-400",
         /**
-         * Primary CTAs — same height as default controls; gradient kept subtle
+         * Primary CTAs: same height as default controls; gradient kept subtle
          */
         cta:
           "h-10 rounded-lg border border-brand-500/20 bg-gradient-to-b from-brand-500 to-brand-700 px-4 py-0 text-sm font-semibold tracking-tight text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_2px_8px_rgba(37,99,235,0.28)] hover:from-brand-600 hover:to-brand-800 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_3px_10px_rgba(37,99,235,0.32)] active:scale-[0.99] dark:border-brand-400/12 dark:from-brand-600 dark:to-brand-900 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_2px_10px_rgba(0,0,0,0.28)] dark:hover:from-brand-600 dark:hover:to-brand-950",
@@ -40,6 +40,7 @@ const buttonVariants = cva(
       },
       size: {
         default: "h-10 px-4 py-2",
+        xs: "h-8 px-2.5 text-xs",
         sm: "h-9 px-3 text-xs",
         lg: "h-11 px-6 text-base",
         icon: "h-9 w-9 shrink-0 p-0",

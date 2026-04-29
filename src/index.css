@@ -25,7 +25,7 @@
   }
 }
 
-/* Light: sky/lavender — a touch softer behind glass */
+/* Light: sky/lavender, a touch softer behind glass */
 html:not(.dark) .app-canvas {
   background:
     radial-gradient(125% 92% at 50% -22%, rgba(96, 165, 250, 0.3), transparent 56%),
@@ -44,7 +44,7 @@ html.dark .app-canvas {
     linear-gradient(168deg, #0d0d10 0%, #16161a 48%, #1c1c1e 100%);
 }
 
-/* Light: subtle glass — dialed back; left bar uses Tailwind in AppSidebar */
+/* Light: subtle glass, dialed back; left bar uses Tailwind in AppSidebar */
 html:not(.dark) [data-surface="panel"] {
   background-color: rgba(255, 255, 255, 0.58) !important;
   -webkit-backdrop-filter: blur(22px) saturate(1.1) !important;
@@ -61,4 +61,13 @@ html:not(.dark) [data-surface="inset"] {
   background-color: rgba(255, 255, 255, 0.72) !important;
   -webkit-backdrop-filter: blur(12px) saturate(1.06) !important;
   backdrop-filter: blur(12px) saturate(1.06) !important;
+}
+
+/* Subtle, consistent text selection */
+::selection {
+  background: rgba(37, 99, 235, 0.22);
+}
+
+html.dark ::selection {
+  background: rgba(96, 165, 250, 0.28);
 }

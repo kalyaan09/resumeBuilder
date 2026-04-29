@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useLayoutEffect, useRef } from "react";
 
 // ── Shared primitives ────────────────────────────────────────────────────────
 
@@ -41,13 +41,24 @@ function InlineTextarea({
   className?: string;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const desiredSelection = useRef<{ start: number; end: number } | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     // Reset first so shrinking works, then expand to full content height
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
+    // Preserve caret/selection (some WebViews reset selection on controlled updates + style changes)
+    const sel = desiredSelection.current;
+    if (document.activeElement === el && sel) {
+      try {
+        el.setSelectionRange(sel.start, sel.end);
+      } catch {
+        /* ignore */
+      }
+      desiredSelection.current = null;
+    }
   }, [value]);
 
   return (
@@ -55,7 +66,15 @@ function InlineTextarea({
       ref={ref}
       value={value || ""}
       placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(e) => {
+        // Capture caret from the input event (more reliable than reading after render in WebViews).
+        try {
+          desiredSelection.current = { start: e.target.selectionStart ?? 0, end: e.target.selectionEnd ?? 0 };
+        } catch {
+          desiredSelection.current = null;
+        }
+        onChange(e.target.value);
+      }}
       rows={2}
       className={`w-full bg-transparent border border-transparent hover:border-gray-200 dark:hover:border-gray-600 focus:border-brand-500 focus:outline-none rounded px-1 py-0.5 resize-none overflow-hidden transition-colors leading-snug ${className}`}
     />
@@ -90,32 +109,46 @@ function RemoveBtn({ onClick }: { onClick: () => void }) {
 function BulletList({
   bullets,
   onChange,
+  notes,
 }: {
   bullets: string[];
   onChange: (b: string[]) => void;
+  notes?: Array<{ type: "error" | "warning" | "info"; message: string; target?: any }>;
 }) {
+  const notesForBullet = (idx: number) =>
+    (notes || []).filter((n) => n?.target?.kind === "bullet" && n?.target?.bulletIndex === idx);
   return (
-    <div className="space-y-1 mt-2">
+    <div className="space-y-1 mt-1.5">
       {bullets.map((bullet, i) => (
-        <div key={i} className="flex items-start gap-1.5 group">
-          <span className="text-gray-400 dark:text-gray-500 text-xs mt-1.5 flex-shrink-0 select-none">•</span>
-          <InlineTextarea
-            value={bullet}
-            onChange={(v) => {
-              const next = [...bullets];
-              next[i] = v;
-              onChange(next);
-            }}
-            placeholder="Bullet point…"
-            className="flex-1 text-sm text-gray-700 dark:text-gray-300"
-          />
-          <button
-            onClick={() => onChange(bullets.filter((_, j) => j !== i))}
-            title="Remove bullet"
-            className="text-gray-300 dark:text-gray-600 hover:text-red-400 transition-colors text-xs mt-1.5 flex-shrink-0 opacity-0 group-hover:opacity-100"
-          >
-            ✕
-          </button>
+        <div key={i} className="group">
+          <div className="flex items-start gap-1.5">
+            <span className="text-gray-400 dark:text-gray-500 text-xs mt-1.5 flex-shrink-0 select-none">•</span>
+            <InlineTextarea
+              value={bullet}
+              onChange={(v) => {
+                const next = [...bullets];
+                next[i] = v;
+                onChange(next);
+              }}
+              placeholder="Bullet point…"
+              className="flex-1 text-sm text-gray-700 dark:text-gray-300"
+            />
+            <button
+              onClick={() => onChange(bullets.filter((_, j) => j !== i))}
+              title="Remove bullet"
+              className="text-gray-300 dark:text-gray-600 hover:text-red-400 transition-colors text-xs mt-1.5 flex-shrink-0 opacity-0 group-hover:opacity-100"
+            >
+              ✕
+            </button>
+          </div>
+          {notesForBullet(i).map((n, idx) => (
+            <div
+              key={idx}
+              className="ml-4 mt-1 rounded-lg bg-amber-50/70 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/35 dark:text-amber-100"
+            >
+              {n.message}
+            </div>
+          ))}
         </div>
       ))}
       <div className="ml-4 mt-1">
@@ -143,11 +176,15 @@ function SummaryEditor({ content, onChange }: { content: string; onChange: (c: a
 function BasicsEditor({
   content,
   onChange,
+  notes,
 }: {
   content: Record<string, string>;
   onChange: (c: any) => void;
+  notes?: Array<{ type: "error" | "warning" | "info"; message: string; target?: any }>;
 }) {
   const updateField = (field: string, value: string) => onChange({ ...(content || {}), [field]: value });
+  const notesForField = (field: string) =>
+    (notes || []).filter((n) => n?.target?.kind === "field" && n?.target?.field === field);
 
   return (
     <div className="space-y-4">
@@ -203,6 +240,11 @@ function BasicsEditor({
               placeholder="github.com/yourname"
               className="mt-1 w-full text-sm text-gray-700 dark:text-gray-300"
             />
+            {notesForField("github").map((n, idx) => (
+              <p key={idx} className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                {n.message}
+              </p>
+            ))}
           </div>
           <div className="rounded-lg bg-gray-50 px-3 py-2 dark:bg-[#1C1C1E]">
             <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">Portfolio</p>
@@ -212,6 +254,11 @@ function BasicsEditor({
               placeholder="yourportfolio.com"
               className="mt-1 w-full text-sm text-gray-700 dark:text-gray-300"
             />
+            {notesForField("portfolio").map((n, idx) => (
+              <p key={idx} className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                {n.message}
+              </p>
+            ))}
           </div>
         </div>
       </div>
@@ -225,69 +272,89 @@ function ExperienceEntry({
   entry,
   onChange,
   onRemove,
+  notes,
 }: {
   entry: any;
   onChange: (e: any) => void;
   onRemove: () => void;
+  notes?: Array<{ type: "error" | "warning" | "info"; message: string; target?: any }>;
 }) {
   const upd = (field: string, val: string) => onChange({ ...entry, [field]: val });
   return (
-    <div className="py-3.5 border-b border-gray-100 dark:border-gray-700 last:border-0 group">
-      {/* Title at Company, Location */}
-      <div className="flex flex-wrap items-baseline gap-x-1 gap-y-0.5">
-        <InlineInput
-          value={entry.title || ""}
-          onChange={(v) => upd("title", v)}
-          placeholder="Job Title"
-          className="font-semibold text-gray-900 dark:text-gray-100 text-sm"
-        />
-        <span className="text-gray-400 dark:text-gray-500 text-xs">at</span>
-        <InlineInput
-          value={entry.company || ""}
-          onChange={(v) => upd("company", v)}
-          placeholder="Company"
-          className="text-gray-800 dark:text-gray-200 text-sm"
-        />
-        {entry.location !== undefined && (
-          <>
-            <span className="text-gray-300 dark:text-gray-600 text-xs">,</span>
+    <div className="group border-b border-gray-100 py-3.5 dark:border-gray-700 last:border-0">
+      <div className="relative rounded-xl pl-3 pr-1.5 transition-colors duration-150 hover:bg-black/[0.03] dark:hover:bg-white/[0.05]">
+        <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-brand-600/15 transition-colors duration-150 group-hover:bg-brand-600/28 dark:bg-brand-400/18 dark:group-hover:bg-brand-400/32" />
+      {/* Resume-like header: company/location (left), dates (right), then job title */}
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
             <InlineInput
-              value={entry.location || ""}
-              onChange={(v) => upd("location", v)}
-              placeholder="Location"
+              value={entry.company || ""}
+              onChange={(v) => upd("company", v)}
+              placeholder="Company"
+              className="min-w-[14ch] font-semibold text-gray-900 dark:text-gray-100 text-sm"
+            />
+            {entry.location !== undefined ? (
+              <>
+                <span className="text-gray-300 dark:text-gray-600 text-xs">•</span>
+                <InlineInput
+                  value={entry.location || ""}
+                  onChange={(v) => upd("location", v)}
+                  placeholder="Location"
+                  className="min-w-[12ch] text-gray-500 dark:text-gray-400 text-xs"
+                />
+              </>
+            ) : null}
+          </div>
+          <div className="mt-0.5">
+            <InlineInput
+              value={entry.title || ""}
+              onChange={(v) => upd("title", v)}
+              placeholder="Job Title"
+              className="w-full text-sm font-medium text-gray-700 dark:text-gray-300"
+            />
+          </div>
+        </div>
+
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+            <InlineInput
+              value={entry.startDate || ""}
+              onChange={(v) => upd("startDate", v)}
+              placeholder="Start"
               className="text-gray-500 dark:text-gray-400 text-xs"
             />
-          </>
-        )}
-      </div>
-      {/* Date range + remove */}
-      <div className="flex items-center gap-1 mt-0.5 mb-0.5">
-        <InlineInput
-          value={entry.startDate || ""}
-          onChange={(v) => upd("startDate", v)}
-          placeholder="Start date"
-          className="text-gray-400 dark:text-gray-500 text-xs"
-        />
-        <span className="text-gray-300 dark:text-gray-600 text-xs">–</span>
-        <InlineInput
-          value={entry.endDate || ""}
-          onChange={(v) => upd("endDate", v)}
-          placeholder="End / Present"
-          className="text-gray-400 dark:text-gray-500 text-xs"
-        />
-        <div className="flex-1" />
-        <RemoveBtn onClick={onRemove} />
+            <span className="text-gray-300 dark:text-gray-600 text-xs">–</span>
+            <InlineInput
+              value={entry.endDate || ""}
+              onChange={(v) => upd("endDate", v)}
+              placeholder="End / Present"
+              className="text-gray-500 dark:text-gray-400 text-xs"
+            />
+          </div>
+          <RemoveBtn onClick={onRemove} />
+        </div>
       </div>
       {/* Bullets */}
       <BulletList
         bullets={entry.bullets || []}
         onChange={(b) => onChange({ ...entry, bullets: b })}
+        notes={notes}
       />
+      </div>
     </div>
   );
 }
 
-function ExperienceEditor({ content, onChange }: { content: any[]; onChange: (c: any) => void }) {
+function ExperienceEditor({
+  content,
+  onChange,
+  notes,
+}: {
+  content: any[];
+  onChange: (c: any) => void;
+  notes?: Array<{ type: "error" | "warning" | "info"; message: string; target?: any }>;
+}) {
   const empty = { company: "", title: "", location: "", startDate: "", endDate: "", bullets: [""] };
   return (
     <div>
@@ -301,6 +368,7 @@ function ExperienceEditor({ content, onChange }: { content: any[]; onChange: (c:
             onChange(next);
           }}
           onRemove={() => onChange(content.filter((_, j) => j !== i))}
+          notes={(notes || []).filter((n) => n?.target?.kind === "bullet" && n?.target?.entryIndex === i)}
         />
       ))}
       <div className="pt-2">
@@ -323,52 +391,58 @@ function EducationEntry({
 }) {
   const upd = (field: string, val: string) => onChange({ ...entry, [field]: val });
   return (
-    <div className="py-3.5 border-b border-gray-100 dark:border-gray-700 last:border-0 group">
-      {/* Degree in Field */}
-      <div className="flex flex-wrap items-baseline gap-x-1 gap-y-0.5">
-        <InlineInput
-          value={entry.degree || ""}
-          onChange={(v) => upd("degree", v)}
-          placeholder="Degree"
-          className="font-semibold text-gray-900 dark:text-gray-100 text-sm"
-        />
-        <span className="text-gray-400 dark:text-gray-500 text-xs">in</span>
-        <InlineInput
-          value={entry.field || ""}
-          onChange={(v) => upd("field", v)}
-          placeholder="Field of Study"
-          className="text-gray-800 dark:text-gray-200 text-sm"
-        />
-      </div>
-      {/* Institution — Year */}
-      <div className="flex items-center gap-1.5 mt-0.5">
-        <InlineInput
-          value={entry.institution || ""}
-          onChange={(v) => upd("institution", v)}
-          placeholder="Institution"
-          className="text-gray-600 dark:text-gray-400 text-xs"
-        />
-        <span className="text-gray-300 dark:text-gray-600 text-xs">—</span>
-        <InlineInput
-          value={entry.endDate || ""}
-          onChange={(v) => upd("endDate", v)}
-          placeholder="Year"
-          className="text-gray-400 dark:text-gray-500 text-xs"
-        />
-        {entry.gpa !== undefined && entry.gpa !== "" && (
-          <>
-            <span className="text-gray-300 dark:text-gray-600 text-xs">·</span>
-            <span className="text-gray-400 dark:text-gray-500 text-xs">GPA</span>
+    <div className="group border-b border-gray-100 py-3.5 dark:border-gray-700 last:border-0">
+      <div className="relative rounded-xl pl-3 pr-1.5 transition-colors duration-150 hover:bg-black/[0.03] dark:hover:bg-white/[0.05]">
+        <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-brand-600/15 transition-colors duration-150 group-hover:bg-brand-600/28 dark:bg-brand-400/18 dark:group-hover:bg-brand-400/32" />
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
             <InlineInput
-              value={entry.gpa || ""}
-              onChange={(v) => upd("gpa", v)}
-              placeholder="GPA"
-              className="text-gray-400 dark:text-gray-500 text-xs"
+              value={entry.institution || ""}
+              onChange={(v) => upd("institution", v)}
+              placeholder="Institution"
+              className="min-w-[14ch] font-semibold text-gray-900 dark:text-gray-100 text-sm"
             />
-          </>
-        )}
-        <div className="flex-1" />
-        <RemoveBtn onClick={onRemove} />
+          </div>
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+            <InlineInput
+              value={entry.degree || ""}
+              onChange={(v) => upd("degree", v)}
+              placeholder="Degree"
+              className="min-w-[10ch] text-gray-800 dark:text-gray-200 text-sm"
+            />
+            <span className="text-gray-400 dark:text-gray-500 text-xs">·</span>
+            <InlineInput
+              value={entry.field || ""}
+              onChange={(v) => upd("field", v)}
+              placeholder="Field of Study"
+              className="min-w-[12ch] text-gray-600 dark:text-gray-400 text-sm"
+            />
+            {entry.gpa !== undefined && (
+              <>
+                <span className="text-gray-300 dark:text-gray-600 text-xs">·</span>
+                <span className="text-gray-400 dark:text-gray-500 text-xs">GPA</span>
+                <InlineInput
+                  value={entry.gpa || ""}
+                  onChange={(v) => upd("gpa", v)}
+                  placeholder="e.g. 3.8"
+                  className="text-gray-500 dark:text-gray-400 text-xs"
+                />
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <InlineInput
+            value={entry.endDate || ""}
+            onChange={(v) => upd("endDate", v)}
+            placeholder="Year"
+            className="text-gray-400 dark:text-gray-500 text-xs"
+          />
+          <RemoveBtn onClick={onRemove} />
+        </div>
+      </div>
       </div>
     </div>
   );
@@ -412,38 +486,41 @@ function ProjectEntry({
 }) {
   const upd = (field: string, val: string) => onChange({ ...entry, [field]: val });
   return (
-    <div className="py-3.5 border-b border-gray-100 dark:border-gray-700 last:border-0 group">
-      {/* Name + remove */}
-      <div className="flex items-baseline gap-2">
+    <div className="group border-b border-gray-100 py-3.5 dark:border-gray-700 last:border-0">
+      <div className="relative rounded-xl pl-3 pr-1.5 transition-colors duration-150 hover:bg-black/[0.03] dark:hover:bg-white/[0.05]">
+        <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-brand-600/15 transition-colors duration-150 group-hover:bg-brand-600/28 dark:bg-brand-400/18 dark:group-hover:bg-brand-400/32" />
+      {/* Resume-like header: project (left), dates (right) */}
+      <div className="flex items-start justify-between gap-3">
         <InlineInput
           value={entry.name || ""}
           onChange={(v) => upd("name", v)}
           placeholder="Project Name"
-          className="font-semibold text-gray-900 dark:text-gray-100 text-sm"
+          className="min-w-0 flex-1 font-semibold text-gray-900 dark:text-gray-100 text-sm"
         />
-        <div className="flex-1" />
-        <RemoveBtn onClick={onRemove} />
-      </div>
-      {/* Date range */}
-      <div className="flex items-center gap-1 mt-0.5 mb-0.5">
-        <InlineInput
-          value={entry.startDate || ""}
-          onChange={(v) => upd("startDate", v)}
-          placeholder="Start"
-          className="text-gray-400 dark:text-gray-500 text-xs"
-        />
-        <span className="text-gray-300 dark:text-gray-600 text-xs">–</span>
-        <InlineInput
-          value={entry.endDate || ""}
-          onChange={(v) => upd("endDate", v)}
-          placeholder="End / Present"
-          className="text-gray-400 dark:text-gray-500 text-xs"
-        />
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <div className="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500">
+            <InlineInput
+              value={entry.startDate || ""}
+              onChange={(v) => upd("startDate", v)}
+              placeholder="Start"
+              className="text-gray-400 dark:text-gray-500 text-xs"
+            />
+            <span className="text-gray-300 dark:text-gray-600 text-xs">–</span>
+            <InlineInput
+              value={entry.endDate || ""}
+              onChange={(v) => upd("endDate", v)}
+              placeholder="End / Present"
+              className="text-gray-400 dark:text-gray-500 text-xs"
+            />
+          </div>
+          <RemoveBtn onClick={onRemove} />
+        </div>
       </div>
       <BulletList
         bullets={entry.bullets || []}
         onChange={(b) => onChange({ ...entry, bullets: b })}
       />
+      </div>
     </div>
   );
 }
@@ -477,31 +554,86 @@ function ProjectsEditor({ content, onChange }: { content: any[]; onChange: (c: a
 
 function SkillsEditor({ content, onChange }: { content: any[]; onChange: (c: any) => void }) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {content.map((skill, i) => (
-        <div key={i} className="flex items-baseline gap-2 group">
-          <InlineInput
-            value={skill.category || ""}
-            onChange={(v) => {
-              const next = [...content];
-              next[i] = { ...skill, category: v };
-              onChange(next);
-            }}
-            placeholder="Category"
-            className="font-medium text-gray-700 dark:text-gray-300 text-sm flex-shrink-0"
-          />
-          <span className="text-gray-400 dark:text-gray-500 text-xs flex-shrink-0">:</span>
-          <InlineTextarea
-            value={Array.isArray(skill.items) ? skill.items.join(", ") : skill.items || ""}
-            onChange={(v) => {
-              const next = [...content];
-              next[i] = { ...skill, items: v.split(",").map((s: string) => s.trim()).filter(Boolean) };
-              onChange(next);
-            }}
-            placeholder="skill1, skill2, skill3"
-            className="flex-1 text-sm text-gray-600 dark:text-gray-400"
-          />
-          <RemoveBtn onClick={() => onChange(content.filter((_, j) => j !== i))} />
+        <div key={i} className="group rounded-lg bg-gray-50/60 px-3 py-2 dark:bg-white/[0.04]">
+          <div className="flex items-center gap-2">
+            <InlineInput
+              value={skill.category || ""}
+              onChange={(v) => {
+                const next = [...content];
+                next[i] = { ...skill, category: v };
+                onChange(next);
+              }}
+              placeholder="Category"
+              className="font-medium text-gray-800 dark:text-gray-200 text-sm"
+            />
+            <div className="flex-1" />
+            <RemoveBtn onClick={() => onChange(content.filter((_, j) => j !== i))} />
+          </div>
+
+          <div className="mt-2 flex flex-wrap gap-2">
+            {(Array.isArray(skill.items) ? skill.items : typeof skill.items === "string" ? skill.items.split(",").map((s: string) => s.trim()).filter(Boolean) : []).map(
+              (item: string, j: number) => (
+                <div
+                  key={j}
+                  className="flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 shadow-sm dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-200"
+                >
+                  <InlineInput
+                    value={item}
+                    onChange={(v) => {
+                      const next = [...content];
+                      const items = Array.isArray(skill.items)
+                        ? [...skill.items]
+                        : typeof skill.items === "string"
+                          ? skill.items.split(",").map((s: string) => s.trim()).filter(Boolean)
+                          : [];
+                      items[j] = v;
+                      next[i] = { ...skill, items: items.map((s: string) => s.trim()).filter(Boolean) };
+                      onChange(next);
+                    }}
+                    placeholder="Skill"
+                    className="text-xs text-gray-700 dark:text-gray-200"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = [...content];
+                      const items = Array.isArray(skill.items)
+                        ? [...skill.items]
+                        : typeof skill.items === "string"
+                          ? skill.items.split(",").map((s: string) => s.trim()).filter(Boolean)
+                          : [];
+                      next[i] = { ...skill, items: items.filter((_: string, idx: number) => idx !== j) };
+                      onChange(next);
+                    }}
+                    className="ml-0.5 text-gray-300 hover:text-red-400 dark:text-gray-600 dark:hover:text-red-400"
+                    aria-label="Remove skill"
+                    title="Remove"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                const next = [...content];
+                const items = Array.isArray(skill.items)
+                  ? [...skill.items]
+                  : typeof skill.items === "string"
+                    ? skill.items.split(",").map((s: string) => s.trim()).filter(Boolean)
+                    : [];
+                next[i] = { ...skill, items: [...items, ""] };
+                onChange(next);
+              }}
+              className="rounded-full border border-dashed border-gray-200 bg-white px-2 py-1 text-xs text-gray-400 hover:text-brand-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-gray-500 dark:hover:text-brand-400"
+            >
+              + Add skill
+            </button>
+          </div>
         </div>
       ))}
       <AddBtn
@@ -690,54 +822,63 @@ function VolunteerEditor({ content, onChange }: { content: any[]; onChange: (c: 
   return (
     <div>
       {content.map((entry, i) => (
-        <div key={i} className="py-3.5 border-b border-gray-100 dark:border-gray-700 last:border-0 group">
-          <div className="flex flex-wrap items-baseline gap-x-1 gap-y-0.5">
-            <InlineInput
-              value={entry.role || entry.title || ""}
-              onChange={(v) => {
-                const next = [...content];
-                next[i] = { ...entry, role: v };
-                onChange(next);
-              }}
-              placeholder="Role"
-              className="font-semibold text-gray-900 dark:text-gray-100 text-sm"
-            />
-            <span className="text-gray-400 dark:text-gray-500 text-xs">at</span>
-            <InlineInput
-              value={entry.organization || entry.company || ""}
-              onChange={(v) => {
-                const next = [...content];
-                next[i] = { ...entry, organization: v };
-                onChange(next);
-              }}
-              placeholder="Organization"
-              className="text-gray-800 dark:text-gray-200 text-sm"
-            />
-            <div className="flex-1" />
-            <RemoveBtn onClick={() => onChange(content.filter((_, j) => j !== i))} />
-          </div>
-          <div className="flex items-center gap-1 mt-0.5">
-            <InlineInput
-              value={entry.startDate || ""}
-              onChange={(v) => {
-                const next = [...content];
-                next[i] = { ...entry, startDate: v };
-                onChange(next);
-              }}
-              placeholder="Start"
-              className="text-gray-400 dark:text-gray-500 text-xs"
-            />
-            <span className="text-gray-300 dark:text-gray-600 text-xs">–</span>
-            <InlineInput
-              value={entry.endDate || ""}
-              onChange={(v) => {
-                const next = [...content];
-                next[i] = { ...entry, endDate: v };
-                onChange(next);
-              }}
-              placeholder="End / Present"
-              className="text-gray-400 dark:text-gray-500 text-xs"
-            />
+        <div key={i} className="group border-b border-gray-100 py-3.5 dark:border-gray-700 last:border-0">
+          <div className="relative rounded-xl pl-3 pr-1.5 transition-colors duration-150 hover:bg-black/[0.03] dark:hover:bg-white/[0.05]">
+            <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-brand-600/15 transition-colors duration-150 group-hover:bg-brand-600/28 dark:bg-brand-400/18 dark:group-hover:bg-brand-400/32" />
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                <InlineInput
+                  value={entry.organization || entry.company || ""}
+                  onChange={(v) => {
+                    const next = [...content];
+                    next[i] = { ...entry, organization: v };
+                    onChange(next);
+                  }}
+                  placeholder="Organization"
+                  className="min-w-[14ch] font-semibold text-gray-900 dark:text-gray-100 text-sm"
+                />
+              </div>
+              <div className="mt-0.5">
+                <InlineInput
+                  value={entry.role || entry.title || ""}
+                  onChange={(v) => {
+                    const next = [...content];
+                    next[i] = { ...entry, role: v };
+                    onChange(next);
+                  }}
+                  placeholder="Role"
+                  className="w-full text-sm text-gray-700 dark:text-gray-300"
+                />
+              </div>
+            </div>
+
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              <div className="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500">
+                <InlineInput
+                  value={entry.startDate || ""}
+                  onChange={(v) => {
+                    const next = [...content];
+                    next[i] = { ...entry, startDate: v };
+                    onChange(next);
+                  }}
+                  placeholder="Start"
+                  className="text-gray-400 dark:text-gray-500 text-xs"
+                />
+                <span className="text-gray-300 dark:text-gray-600 text-xs">–</span>
+                <InlineInput
+                  value={entry.endDate || ""}
+                  onChange={(v) => {
+                    const next = [...content];
+                    next[i] = { ...entry, endDate: v };
+                    onChange(next);
+                  }}
+                  placeholder="End / Present"
+                  className="text-gray-400 dark:text-gray-500 text-xs"
+                />
+              </div>
+              <RemoveBtn onClick={() => onChange(content.filter((_, j) => j !== i))} />
+            </div>
           </div>
           {entry.bullets && (
             <BulletList
@@ -749,6 +890,7 @@ function VolunteerEditor({ content, onChange }: { content: any[]; onChange: (c: 
               }}
             />
           )}
+          </div>
         </div>
       ))}
       <div className="pt-2">
@@ -775,7 +917,7 @@ function LanguagesEditor({ content, onChange }: { content: any[]; onChange: (c: 
             placeholder="Language"
             className="font-medium text-gray-800 dark:text-gray-200 text-sm"
           />
-          <span className="text-gray-400 dark:text-gray-500 text-xs">—</span>
+          <span className="text-gray-400 dark:text-gray-500 text-xs">·</span>
           <InlineInput
             value={lang.fluency || ""}
             onChange={(v) => {
@@ -846,18 +988,20 @@ function ContentEditor({
   sectionKey,
   content,
   onChange,
+  notes,
 }: {
   sectionKey: string;
   content: any;
   onChange: (c: any) => void;
+  notes?: Array<{ type: "error" | "warning" | "info"; message: string; target?: any }>;
 }) {
   switch (sectionKey) {
     case "basics":
-      return <BasicsEditor content={content || {}} onChange={onChange} />;
+      return <BasicsEditor content={content || {}} onChange={onChange} notes={notes} />;
     case "summary":
       return <SummaryEditor content={content} onChange={onChange} />;
     case "experience":
-      return <ExperienceEditor content={content || []} onChange={onChange} />;
+      return <ExperienceEditor content={content || []} onChange={onChange} notes={notes} />;
     case "education":
       return <EducationEditor content={content || []} onChange={onChange} />;
     case "skills":
@@ -889,6 +1033,7 @@ interface SectionBlockProps {
   onReask: (feedback: string) => Promise<void>;
   onReset: () => void;
   showReask?: boolean;
+  notes?: Array<{ type: "error" | "warning" | "info"; message: string; target?: any }>;
 }
 
 function formatKey(key: string): string {
@@ -903,7 +1048,9 @@ export default function SectionBlock({
   onReask,
   onReset,
   showReask = true,
+  notes = [],
 }: SectionBlockProps) {
+  const remainingNotes = notes.filter((n) => !n?.target);
   const [reaskOpen, setReaskOpen] = useState(false);
   const [reaskText, setReaskText] = useState("");
   const [reaskLoading, setReaskLoading] = useState(false);
@@ -955,9 +1102,32 @@ export default function SectionBlock({
         </div>
       </div>
 
+      {remainingNotes.length > 0 ? (
+        <div className="border-b border-gray-100 bg-gray-50/60 px-5 py-3 dark:border-[#3A3A3C] dark:bg-white/[0.04]">
+          <div className="space-y-2">
+            {remainingNotes.map((n, idx) => (
+              <div key={idx} className="flex items-start gap-2">
+                <span
+                  className={
+                    n.type === "error"
+                      ? "mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300"
+                      : n.type === "warning"
+                        ? "mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                        : "mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200"
+                  }
+                >
+                  {n.type}
+                </span>
+                <p className="text-sm text-gray-700 dark:text-gray-200">{n.message}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {/* Content */}
       <div className="px-5 py-4">
-        <ContentEditor sectionKey={sectionKey} content={content} onChange={onChange} />
+        <ContentEditor sectionKey={sectionKey} content={content} onChange={onChange} notes={notes} />
       </div>
 
       {/* Re-ask panel */}

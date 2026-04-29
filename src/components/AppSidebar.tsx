@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ChevronsLeft, ChevronsRight, Cpu, FileText, UserRound } from "lucide-react";
 import { useConnection } from "../context/ConnectionContext";
+import { useProfiles } from "../context/ProfilesContext";
 import { Button } from "../ui";
 import { cn } from "../ui/cn";
 
@@ -77,6 +78,7 @@ export default function AppSidebar({
 }) {
   const navigate = useNavigate();
   const { backendReady, backendConnecting, backendError } = useConnection();
+  const { activeProfileName } = useProfiles();
 
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -95,9 +97,10 @@ export default function AppSidebar({
   }, [collapsed]);
 
   const templateName = TEMPLATE_LABELS[(config?.template as string) || ""] || "Your resume";
-  const role = (config?.role as string) || "—";
+  const role = (config?.role as string) || "Not set";
   const levelKey = (config?.level as string) || "";
-  const roleLine = `${role} · ${LEVEL_LABELS[levelKey] || levelKey || "—"}`;
+  const roleLine = `${role} · ${LEVEL_LABELS[levelKey] || levelKey || "Not set"}`;
+  const profileLine = activeProfileName || roleLine;
   const modelLine = formatModelLine(config?.modelConfig as Record<string, string>);
   const modelParts = modelLine.split("·").map((s) => s.trim());
   const modelProvider = modelParts[0] || "Model";
@@ -196,7 +199,7 @@ export default function AppSidebar({
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl text-gray-700 dark:text-gray-200">
                   <UserRound className="h-5 w-5 shrink-0 opacity-80" />
                 </div>
-                <span className="max-w-[52px] truncate">{roleLine}</span>
+                <span className="max-w-[52px] truncate">{profileLine}</span>
               </div>
               <div className="flex flex-col items-center gap-1.5">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl text-gray-700 dark:text-gray-200">
@@ -207,7 +210,7 @@ export default function AppSidebar({
             </div>
             <div className="flex justify-center" title={
               backendReady && !backendConnecting
-                ? "Preview ready"
+                ? "Ready"
                 : backendConnecting
                   ? "Connecting…"
                   : "Preview unavailable"
@@ -272,7 +275,7 @@ export default function AppSidebar({
               <div className="flex items-start gap-2">
                 <UserRound className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
                 <div className="min-w-0">
-                  <span className="block truncate text-sm text-gray-700 dark:text-gray-300">{roleLine}</span>
+                  <span className="block truncate text-sm text-gray-700 dark:text-gray-300">{profileLine}</span>
                 </div>
               </div>
               <div className="flex items-start gap-2">
@@ -291,7 +294,7 @@ export default function AppSidebar({
               {connectionDot}
               <span className="text-[11px] text-gray-500 dark:text-gray-400">
                 {backendReady && !backendConnecting
-                  ? "Preview ready"
+                  ? "Ready"
                   : backendConnecting
                     ? "Connecting…"
                     : "Preview unavailable"}

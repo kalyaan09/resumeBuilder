@@ -127,7 +127,7 @@
     break-inside: avoid;
   }
   li {
-    display: block;
+    display: list-item;
     page-break-inside: avoid;
     break-inside: avoid;
     orphans: 3;
@@ -310,7 +310,13 @@
   <div class="section">
     <div class="section-title">Awards</div>
     <ul class="bullets">
-      {% for award in resume.awards %}<li>{{ award }}</li>{% endfor %}
+      {% for award in resume.awards %}
+        {% if award is mapping %}
+          <li><strong>{{ award.get('title', '') }}</strong>{% if award.get('date') %} — {{ award.date }}{% endif %}{% if award.get('awarder') %}, {{ award.awarder }}{% endif %}{% if award.get('summary') %} — {{ award.summary }}{% endif %}</li>
+        {% else %}
+          <li>{{ award }}</li>
+        {% endif %}
+      {% endfor %}
     </ul>
   </div>
 

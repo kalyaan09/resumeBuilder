@@ -1,4 +1,8 @@
 import { useState } from "react";
+import { Button } from "../ui";
+import { cn } from "../ui/cn";
+import { PlugZap } from "lucide-react";
+import { formatAiError } from "../ui/errorFormat";
 
 interface ProviderField {
   key: string;
@@ -28,7 +32,7 @@ const PROVIDERS: Array<{
   {
     id: "gemini",
     name: "Google Gemini",
-    description: "Free tier available — no credit card required",
+    description: "Free tier available; no credit card required",
     fields: [
       { key: "api_key", label: "API Key", placeholder: "AIza...", secret: true },
       {
@@ -36,10 +40,10 @@ const PROVIDERS: Array<{
         label: "Model",
         placeholder: "gemini-3-flash",
         options: [
-          { value: "gemini-2.5-flash",            label: "gemini-2.5-flash",            note: "Recommended — fast, stable" },
-          { value: "gemini-3-flash-preview",       label: "gemini-3-flash-preview",       note: "Latest flash — fast, general use" },
-          { value: "gemini-3.1-pro-preview",       label: "gemini-3.1-pro-preview",       note: "Best quality — complex reasoning & coding" },
-          { value: "gemini-3.1-flash-lite-preview",label: "gemini-3.1-flash-lite-preview",note: "Fastest — low-latency, high-volume" },
+          { value: "gemini-2.5-flash",            label: "gemini-2.5-flash",            note: "Recommended: fast, stable" },
+          { value: "gemini-3-flash-preview",       label: "gemini-3-flash-preview",       note: "Latest flash, fast general use" },
+          { value: "gemini-3.1-pro-preview",       label: "gemini-3.1-pro-preview",       note: "Best quality for complex reasoning and coding" },
+          { value: "gemini-3.1-flash-lite-preview",label: "gemini-3.1-flash-lite-preview",note: "Fastest, low latency and high volume" },
           { value: "gemma-4-31b-it",               label: "gemma-4-31b-it",               note: "Open-weight model" },
         ],
       },
@@ -99,7 +103,7 @@ interface ModelPickerProps {
   apiKey: string;
   onChange: (config: ModelConfig) => void;
   onApiKeyChange: (key: string) => void;
-  /** Called when a test connection succeeds — use to mark the model as verified */
+  /** Called when a test connection succeeds; use to mark the model as verified */
   onTestSuccess?: () => void;
 }
 
@@ -131,7 +135,7 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
       const res = await fetch("http://localhost:8000/test-connection", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Merge api_key in for this call only — it never lives in value/localStorage
+        // Merge api_key in for this call only; it never lives in value/localStorage
         body: JSON.stringify({ llm_config: { ...value, api_key: apiKey } }),
       });
       const data = await res.json();
@@ -140,8 +144,16 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
         setTestMessages((p) => ({ ...p, [provider]: "Connected! Model is responding." }));
         onTestSuccess?.();
       } else {
+        const rawError =
+          typeof data?.error === "string"
+            ? data.error
+            : data?.error
+              ? JSON.stringify(data.error)
+              : typeof data?.message === "string"
+                ? data.message
+                : "Connection failed";
         setTestStatus((p) => ({ ...p, [provider]: "error" }));
-        setTestMessages((p) => ({ ...p, [provider]: data.error || "Connection failed" }));
+        setTestMessages((p) => ({ ...p, [provider]: `Error code: ${res.status} - ${rawError}` }));
       }
     } catch {
       setTestStatus((p) => ({ ...p, [provider]: "error" }));
@@ -149,7 +161,7 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
         ...p,
         [provider]:
           provider === "ollama"
-            ? "Ollama is not running — start it with `ollama serve`"
+            ? "Ollama is not running. Start it with `ollama serve`"
             : "Could not reach the local preview service. Try starting the app again.",
       }));
     }
@@ -158,28 +170,33 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
   const currentProvider = PROVIDERS.find((p) => p.id === selectedProvider);
   const status = testStatus[selectedProvider] || "idle";
   const message = testMessages[selectedProvider] || "";
+  const friendlyError = status === "error" ? formatAiError(message) : null;
 
   return (
     <div className="space-y-4">
       {/* Provider tabs */}
       <div className="flex flex-wrap gap-2">
         {PROVIDERS.map((p) => (
-          <button
+          <Button
             key={p.id}
+            type="button"
+            variant="ghost"
+            size="xs"
             onClick={() => handleProviderSelect(p.id)}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+            className={cn(
+              "h-auto rounded-xl px-3 py-2 text-sm font-medium",
               selectedProvider === p.id
-                ? "bg-brand-600 text-white border-brand-600"
-                : "bg-white dark:bg-[#2C2C2E] border-gray-200 dark:border-[#3A3A3C] text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-500"
-            }`}
+                ? "bg-black/[0.07] text-gray-900 shadow-sm dark:bg-white/[0.12] dark:text-white"
+                : "text-gray-700 hover:bg-black/[0.05] dark:text-gray-200 dark:hover:bg-white/[0.08]"
+            )}
           >
             {p.name}
-          </button>
+          </Button>
         ))}
       </div>
 
       {currentProvider && (
-        <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-[#3A3A3C] dark:bg-[#2C2C2E] space-y-3">
+        <div className="space-y-3 rounded-xl border border-gray-200/80 bg-white/70 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] backdrop-blur-sm dark:border-white/10 dark:bg-white/[0.06]">
           <p className="text-xs text-gray-500 dark:text-gray-400">{currentProvider.description}</p>
 
           {currentProvider.fields.map((field) => (
@@ -190,21 +207,24 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
               {field.options ? (
                 <div className="space-y-1.5">
                   {field.options.map((opt) => (
-                    <button
+                    <Button
                       key={opt.value}
                       type="button"
+                      variant="secondary"
+                      size="xs"
                       onClick={() => handleFieldChange(field.key, opt.value)}
-                      className={`w-full text-left px-3 py-2 rounded-lg border text-sm transition-all ${
+                      className={cn(
+                        "h-auto w-full justify-start rounded-xl px-3 py-2 text-left",
                         (value as any)?.[field.key] === opt.value
-                          ? "border-brand-500 bg-brand-50 dark:bg-[#3A3A3C] text-brand-700 dark:text-white"
-                          : "border-gray-200 dark:border-[#3A3A3C] hover:border-gray-300 dark:hover:border-gray-500 text-gray-700 dark:text-gray-300"
-                      }`}
+                          ? "border-brand-500/70 bg-brand-50/70 text-brand-700 dark:border-brand-400/25 dark:bg-brand-900/20 dark:text-white"
+                          : "text-gray-700 dark:text-gray-200"
+                      )}
                     >
                       <span className="font-mono font-medium">{opt.label}</span>
                       {opt.note && (
                         <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">{opt.note}</span>
                       )}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               ) : (
@@ -213,25 +233,30 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
                   placeholder={field.placeholder}
                   value={field.key === "api_key" ? apiKey : ((value as any)?.[field.key] || "")}
                   onChange={(e) => handleFieldChange(field.key, e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 dark:border-[#3A3A3C] dark:bg-[#1C1C1E] dark:text-gray-100"
+                  className="w-full rounded-xl border border-gray-200/80 bg-white/70 px-3 py-2 font-mono text-sm text-gray-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] backdrop-blur-sm focus:outline-none focus-visible:shadow-focus dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100"
                 />
               )}
             </div>
           ))}
 
           <div className="flex items-center gap-3 pt-1">
-            <button
+            <Button
+              type="button"
+              variant="secondary"
+              size="xs"
               onClick={handleTest}
               disabled={status === "loading"}
-              className="rounded-lg border border-gray-300 bg-gray-100 px-4 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-200 disabled:opacity-50 dark:border-[#3A3A3C] dark:bg-[#3A3A3C] dark:text-gray-200 dark:hover:bg-[#48484A]"
             >
+              <PlugZap data-icon="inline-start" />
               {status === "loading" ? "Testing..." : "Test Connection"}
-            </button>
+            </Button>
             {status === "ok" && (
-              <span className="text-green-600 dark:text-green-400 text-sm">✅ {message}</span>
+              <span className="text-emerald-600 dark:text-emerald-400 text-sm">✅ {message}</span>
             )}
             {status === "error" && (
-              <span className="text-red-600 dark:text-red-400 text-sm">❌ {message}</span>
+              <span className="text-red-600 dark:text-red-400 text-sm" title={friendlyError?.raw}>
+                ❌ {friendlyError?.message || message}
+              </span>
             )}
           </div>
         </div>

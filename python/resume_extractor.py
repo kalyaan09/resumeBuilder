@@ -37,16 +37,16 @@ You are a professional resume parser. Extract ALL information from the resume \
 text below and output it as a single JSON object following the exact schema provided.
 
 RULES:
-- Extract every piece of information present — do not omit anything
+- Extract every piece of information present; do not omit anything
 - Never invent or hallucinate information that is not in the resume
 - If a field has no data, use empty string "" or empty list []
 - Preserve original date formats (e.g. "June 2020", "Aug. 2018", "Present")
-- Each bullet point becomes a separate string in the bullets array — keep the \
+- Each bullet point becomes a separate string in the bullets array. Keep the \
 full text of each bullet, do not truncate
 - For skills: preserve the category groupings if they exist; otherwise create \
 reasonable categories (e.g. "Languages", "Frameworks", "Tools", "Cloud")
 - For linkedin/github/portfolio: include the URL or handle exactly as shown
-- Return ONLY valid JSON — no commentary, no markdown, no code fences
+- Return ONLY valid JSON with no commentary, no markdown, and no code fences
 
 SCHEMA (fill every field):
 {
@@ -277,12 +277,12 @@ def extract_resume_to_json(file_bytes: bytes, extension: str, llm_client) -> dic
     Returns:
         dict conforming to JSON Resume schema
     """
-    # Step 1 — extract readable text
+    # Step 1: extract readable text
     raw_text = extract_text_from_file(file_bytes, extension)
     log.info(f"[extract] text extracted from {extension} ({len(raw_text)} chars)")
     log.debug(f"[extract] text preview:\n{raw_text[:800]}")
 
-    # Step 2 — ask LLM to structure it
+    # Step 2: ask LLM to structure it
     user_prompt = f"Extract this resume into JSON:\n\n{raw_text}"
     response = llm_client.complete(
         EXTRACTION_SYSTEM_PROMPT,
@@ -292,7 +292,7 @@ def extract_resume_to_json(file_bytes: bytes, extension: str, llm_client) -> dic
     log.info("[extract] LLM responded")
     log.debug(f"[extract] raw LLM response:\n{response[:800]}")
 
-    # Step 3 — parse + fill defaults
+    # Step 3: parse and fill defaults
     cleaned = _strip_fences(response)
     data = json.loads(cleaned)
     return _fill_defaults(data)

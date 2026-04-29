@@ -83,7 +83,7 @@ _DUMMY_RESUME = {
     ],
     "projects": [
         {
-            "name": "OpenTelemetry Contrib — Kafka Receiver",
+            "name": "OpenTelemetry Contrib: Kafka Receiver",
             "startDate": "Jan 2023",
             "endDate": "Present",
             "bullets": [
@@ -92,7 +92,7 @@ _DUMMY_RESUME = {
             ],
         },
         {
-            "name": "ResumeCraft — AI Resume Tailoring Tool",
+            "name": "ResumeCraft: AI Resume Tailoring Tool",
             "startDate": "Aug 2023",
             "endDate": "Dec 2023",
             "bullets": [
@@ -107,7 +107,7 @@ _DUMMY_RESUME = {
     ],
     "publications": [],
     "awards": [
-        {"title": "Hackathon 1st Place — Stripe Internal DevFest 2023", "date": "2023", "summary": "Built a real-time API cost analyzer in 24 hours."},
+        {"title": "Hackathon 1st Place, Stripe Internal DevFest 2023", "date": "2023", "summary": "Built a real-time API cost analyzer in 24 hours."},
     ],
     "volunteer": [],
     "languages": [],
@@ -145,7 +145,7 @@ def render_html(
     active_sections: list[str],
     font_size: float = 10.0,
 ) -> str:
-    """Public wrapper — returns rendered HTML for preview."""
+    """Public wrapper: returns rendered HTML for preview."""
     return _render_html(resume, template_name, section_order, active_sections, font_size)
 
 
@@ -156,8 +156,8 @@ def _safe_filename(name: str) -> str:
 
 # One-page content height at 96dpi: (11in - 0.8in margins) × 96 = 979px
 _PAGE_CONTENT_HEIGHT_PX = 979
-_LETTER_W_PX = 816   # 8.5in × 96dpi — letter page width
-_LETTER_H_PX = 1056  # 11in × 96dpi — letter page height
+_LETTER_W_PX = 816   # 8.5in × 96dpi, letter page width
+_LETTER_H_PX = 1056  # 11in × 96dpi, letter page height
 
 
 def export_to_pdf(
@@ -214,11 +214,6 @@ def export_to_pdf(
                 chk.close()
 
                 content_height = chk_rect["h"]
-                print(
-                    f"[auto-fit] size={size}pt  body_w={chk_rect['w']:.1f}px"
-                    f"  body_h={content_height:.1f}px  threshold={_PAGE_CONTENT_HEIGHT_PX}px"
-                )
-
                 if content_height <= _PAGE_CONTENT_HEIGHT_PX:
                     chosen_size = size
                     found_fit = True
@@ -243,10 +238,6 @@ def export_to_pdf(
         pdf_rect = pdf_page.evaluate(
             "({'w': document.body.getBoundingClientRect().width,"
             " 'h': document.body.getBoundingClientRect().height})"
-        )
-        print(
-            f"[pdf-render] size={chosen_size}pt  body_w={pdf_rect['w']:.1f}px"
-            f"  body_h={pdf_rect['h']:.1f}px"
         )
         pdf_page.pdf(
             path=str(output_path),
@@ -320,5 +311,3 @@ def render_preview_pdf_to_path(template_name: str, output_path: str) -> None:
         active_sections=_DUMMY_ACTIVE_SECTIONS,
         output_path=output_path,
     )
-
-

@@ -16,7 +16,7 @@ export async function getApiKey(provider: string): Promise<string> {
     const store = await Store.load(STORE_FILE);
     return (await store.get<string>(provider)) ?? "";
   } catch {
-    // Not in Tauri context — use isolated localStorage entry
+    // Not in Tauri context: use isolated localStorage entry
     const keys = JSON.parse(localStorage.getItem(LS_FALLBACK_KEY) || "{}");
     return keys[provider] || "";
   }
@@ -30,7 +30,7 @@ export async function setApiKey(provider: string, key: string): Promise<void> {
     await store.set(provider, key);
     await store.save();
   } catch {
-    // Not in Tauri context — use isolated localStorage entry
+    // Not in Tauri context: use isolated localStorage entry
     const keys = JSON.parse(localStorage.getItem(LS_FALLBACK_KEY) || "{}");
     keys[provider] = key;
     localStorage.setItem(LS_FALLBACK_KEY, JSON.stringify(keys));

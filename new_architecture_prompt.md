@@ -1,4 +1,4 @@
-# New Architecture — Resume Editor App
+# New Architecture: Resume Editor App
 
 ## Context
 We are scrapping the old LaTeX parsing and find/replace approach entirely. It was fragile, template-specific, and kept breaking. We are rebuilding the core pipeline with a clean, scalable architecture. Keep all existing UI components, multi-model llm_client.py, connection testing, and Tauri setup. Rebuild everything related to resume parsing, template rendering, and PDF export.
@@ -20,7 +20,7 @@ render into our HTML/CSS template → Puppeteer → PDF
 
 ---
 
-## Data Model — JSON Resume Schema
+## Data Model: JSON Resume Schema
 
 Use this as the master data structure for every resume:
 
@@ -184,22 +184,22 @@ PRESETS = {
 
 ## Onboarding Flow
 
-### Step 1 — User Input Screen
+### Step 1: User Input Screen
 Collect:
 - Full name, email, phone, location, LinkedIn, GitHub (optional), portfolio (optional)
 - Role (dropdown: SDE, DE, ML Engineer, PM, BA, TPM, DevOps, Data Scientist, Data Analyst, Other)
 - Level (dropdown: New Grad, Junior 1-2yr, Mid 2-4yr)
 - Upload resume (.tex, .docx, or PDF)
 
-### Step 2 — Extract Resume Content
+### Step 2: Extract Resume Content
 Call `/extract-resume` endpoint:
 - Input: uploaded resume file
 - Use LLM to extract content into JSON Resume schema
 - Return JSON
 
-### Step 3 — Template Suggestion
+### Step 3: Template Suggestion
 1. Look up role + level in PRESETS table → get suggested template + sections
-2. Call `/validate-template` endpoint — send to LLM:
+2. Call `/validate-template` endpoint and send to the LLM:
    - Role, level, suggested template, suggested sections
    - LLM returns: `{"approved": true}` OR `{"approved": false, "template": "jake", "sections": [...], "reason": "..."}`
 3. Show user:
@@ -222,7 +222,7 @@ Call `/extract-resume` endpoint:
 └─────────────────────────────────────────┘
 ```
 
-### Step 4 — User Feedback Loop (if "Change it")
+### Step 4: User Feedback Loop (if "Change it")
 Show:
 - List of current sections with [edit name] [remove] buttons
 - [+ Add section] button
@@ -231,13 +231,13 @@ Show:
 
 Track back-and-forth count:
 - 1-4 times: no warning
-- 5 times: 🟡 yellow warning "You've gone back and forth 5 times — each request uses your API tokens"
+- 5 times: 🟡 yellow warning "You've gone back and forth 5 times. Each request uses your API tokens"
 - 6-9 times: 🟠 warning gets stronger each time
 - 10 times: 🔴 "This is getting expensive. Estimated tokens used: X. Are you sure you want to continue?"
 
 Loop until user clicks "Looks good!"
 
-### Step 5 — Render and Review
+### Step 5: Render and Review
 1. Render extracted JSON into chosen template
 2. Show in editor UI (same editor component used for job applications)
 3. User can edit any field directly
@@ -274,13 +274,13 @@ You will receive:
 Your job is to tailor the resume content for this specific job description.
 
 STRICT RULES:
-- Return EXACT same JSON structure — same keys, same types, same number of items
+- Return EXACT same JSON structure with the same keys, same types, and same number of items
 - Never add or remove bullet points
 - Never invent experience, skills, or credentials that don't exist
 - Only rewrite existing text content
 - Prioritize keywords from the JD naturally
 - Keep bullets achievement-focused with metrics
-- Plain text only — no markdown, no special characters
+- Plain text only: no markdown, no special characters
 - Return valid JSON only, no commentary
 ```
 
@@ -370,7 +370,7 @@ All stored locally at `~/.resume-editor/`:
 
 ## What To Keep From Current Codebase
 - ✅ All UI components (editor, settings, model picker, setup screens)
-- ✅ `llm_client.py` — multi-model support
+- ✅ `llm_client.py` for multi-model support
 - ✅ Connection testing logic
 - ✅ Tauri setup, plugins, file system access
 - ✅ Reveal in Finder feature

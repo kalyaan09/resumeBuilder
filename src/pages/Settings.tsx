@@ -1,16 +1,24 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useMemo } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import ModelPicker from "../components/ModelPicker";
+import { RoleCombobox } from "../components/RoleCombobox";
 import ResumeEditor from "../components/ResumeEditor";
+import SectionOrderEditor from "../components/SectionOrderEditor";
 import AppSidebar from "../components/AppSidebar";
 import { getApiKey, setApiKey } from "../lib/secureStore";
-import { readConfig, writeConfig, readResume, writeResume } from "../lib/persistenceStore";
+import { readConfig, writeConfig, readShared, readProfileResume, writeResume } from "../lib/persistenceStore";
 import { applyTheme, Theme } from "../lib/themeStore";
-import { Button, Modal, SegmentedControl, Surface } from "../ui";
-import { Save, Sparkles } from "lucide-react";
+import { Button, Modal, SegmentedControl, Surface, TypographyMuted } from "../ui";
+import { FolderOpen, Save, Sparkles, Trash2, X } from "lucide-react";
 import { cn } from "../ui/cn";
+import { formatAiError } from "../ui/errorFormat";
+import { useProfiles } from "../context/ProfilesContext";
+import { createProfile, deleteProfile as deleteProfileApi, getProfileResume, getShared, putProfileResume, putShared, resetAll } from "../lib/sidecarApi";
+import { CORE_SECTION_KEYS, SECTION_LABELS, computeSectionsWithData, getDefaultSectionOrderFromConfig, mergeVisibleReorderWithHidden } from "../lib/sectionOrder";
 
 const SIDECAR = "http://localhost:8000";
+/** Bump when python/main.py PREVIEW_VERSION changes (busts WebView cache for embedded PDFs). */
+const PREVIEW_ASSET_VERSION = 7;
 
 const TEMPLATE_LABELS: Record<string, string> = {
   jake: "Jake's Resume",
@@ -25,15 +33,16 @@ const THEME_LABELS: Record<string, string> = {
   system: "System",
 };
 
-type SettingsNavId = "layout" | "resume" | "prefs" | "model" | "appearance" | "danger";
+type SettingsNavId = "layout" | "resume" | "profiles" | "prefs" | "model" | "appearance" | "danger";
 
 const SETTINGS_NAV: { id: SettingsNavId; label: string; danger?: boolean }[] = [
-  { id: "layout", label: "Resume layout" },
-  { id: "resume", label: "Master resume" },
-  { id: "prefs", label: "Writing preferences" },
-  { id: "model", label: "AI model" },
+  { id: "layout", label: "Resume Layout" },
+  { id: "resume", label: "Basic Info" },
+  { id: "profiles", label: "Profiles" },
+  { id: "prefs", label: "Writing Preferences" },
+  { id: "model", label: "AI Model" },
   { id: "appearance", label: "Appearance" },
-  { id: "danger", label: "Danger zone", danger: true },
+  { id: "danger", label: "Reset", danger: true },
 ];
 
 /** Match AppSidebar Editor/Settings nav: filled pill when active, ghost when idle. */
@@ -50,17 +59,83 @@ function settingsNavItemClass(isActive: boolean, danger?: boolean) {
   );
 }
 
+function TemplateThumb({
+  id,
+  name,
+  selected,
+  onOpenPreview,
+}: {
+  id: string;
+  name: string;
+  selected: boolean;
+  onOpenPreview: () => void;
+}) {
+  const pdfSrc = `${SIDECAR}/template-preview-pdf/${id}?v=${PREVIEW_ASSET_VERSION}#toolbar=0&navpanes=0&scrollbar=0`;
+
+  return (
+    <div
+      className={cn(
+        "group relative w-full min-w-0 overflow-hidden rounded-card border-2 transition-all",
+        selected ? "border-[#2563EB]" : "border-gray-200 hover:border-gray-300 dark:border-gray-600 dark:hover:border-gray-500"
+      )}
+    >
+      {selected ? (
+        <div
+          className="absolute right-2 top-2 z-20 flex h-7 w-7 items-center justify-center rounded-full bg-[#2563EB] text-white shadow-md"
+          aria-hidden
+        >
+          <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 12 12" aria-hidden>
+            <path d="M10 3L5 8.5 2 5.5l-1 1 4 4 6-7-1-1z" />
+          </svg>
+        </div>
+      ) : null}
+
+      <div className="relative overflow-hidden bg-white" style={{ aspectRatio: "8.5/11" }}>
+        <object
+          data={pdfSrc}
+          type="application/pdf"
+          className="block h-full w-full bg-white"
+          style={{ width: "100%", height: "100%", pointerEvents: "none" }}
+        >
+          <div className="flex h-full w-full items-center justify-center px-3 text-center text-xs text-gray-400">
+            PDF preview not available. Use “Full preview”.
+          </div>
+        </object>
+
+        <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-all group-hover:bg-black/25">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenPreview();
+            }}
+            className="pointer-events-auto rounded-full px-3 py-1.5 text-xs font-semibold opacity-0 shadow-md transition-opacity group-hover:pointer-events-auto group-hover:opacity-100"
+          >
+            Full preview
+          </Button>
+        </div>
+      </div>
+
+      <div className={cn("flex items-center justify-between px-3 py-2", selected ? "bg-brand-50 dark:bg-brand-900/20" : "bg-white dark:bg-[#2C2C2E]")}>
+        <span className={cn("truncate text-xs font-medium", selected ? "text-brand-700 dark:text-brand-400" : "text-gray-700 dark:text-gray-300")}>
+          {name}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 interface Suggestion {
   section: string;
   type: "error" | "warning" | "info";
   message: string;
 }
 
-const SUGGESTION_STYLES: Record<string, { bg: string; border: string; text: string; badge: string }> = {
-  error: { bg: "bg-red-50 dark:bg-red-950/40", border: "border-red-200 dark:border-red-800", text: "text-red-800 dark:text-red-300", badge: "bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400" },
-  warning: { bg: "bg-amber-50 dark:bg-amber-950/40", border: "border-amber-200 dark:border-amber-800", text: "text-amber-800 dark:text-amber-300", badge: "bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-400" },
-  info: { bg: "bg-blue-50 dark:bg-blue-950/40", border: "border-blue-200 dark:border-blue-800", text: "text-blue-800 dark:text-blue-300", badge: "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-400" },
-};
+
+// Profile JSON contains "id" and "name" metadata. Never render these as resume sections.
+const PROFILE_METADATA_KEYS = new Set(["id", "name", "useCustomSectionOrder", "sectionOrder"]);
 
 function buildSectionMap(
   resume: Record<string, unknown>,
@@ -72,13 +147,15 @@ function buildSectionMap(
     if (key !== "basics" && resume[key] !== undefined) result[key] = resume[key];
   }
   for (const key of Object.keys(resume)) {
-    if (!(key in result) && resume[key] !== undefined) result[key] = resume[key];
+    if (!(key in result) && resume[key] !== undefined && !PROFILE_METADATA_KEYS.has(key)) result[key] = resume[key];
   }
   return result;
 }
 
 export default function Settings() {
+  const location = useLocation();
   const navigate = useNavigate();
+  const { profiles, activeProfileId, switchTo, refresh } = useProfiles();
 
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [apiKey, setApiKeyState] = useState("");
@@ -92,42 +169,106 @@ export default function Settings() {
   const [resumeDirty, setResumeDirty] = useState(false);
   const [resumeSaving, setResumeSaving] = useState(false);
 
+  const [editedShared, setEditedShared] = useState<Record<string, unknown> | null>(null);
+  const [editedProfile, setEditedProfile] = useState<Record<string, unknown> | null>(null);
+
   const [syncing, setSyncing] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [dismissedReviewBanner, setDismissedReviewBanner] = useState(false);
+  const [showReviewErrorDetails, setShowReviewErrorDetails] = useState(false);
 
   const [loading, setLoading] = useState(true);
 
-  const [savedTemplate, setSavedTemplate] = useState<string>("");
   const [previewModal, setPreviewModal] = useState<string | null>(null);
-  const [savedDefaultFontSize, setSavedDefaultFontSize] = useState<number>(10);
 
   const [activeNav, setActiveNav] = useState<SettingsNavId>("layout");
+  const [resetOpen, setResetOpen] = useState(false);
+  const [createProfileOpen, setCreateProfileOpen] = useState(false);
+  const [newProfileName, setNewProfileName] = useState("");
+  const [newProfileFile, setNewProfileFile] = useState<File | null>(null);
+  const [creatingProfile, setCreatingProfile] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
+  const [addSectionOpen, setAddSectionOpen] = useState(false);
+  const [addSectionKey, setAddSectionKey] = useState<string>("certifications");
+  const [addSectionScope, setAddSectionScope] = useState<"profile" | "all">("profile");
+  const [addSectionBusy, setAddSectionBusy] = useState(false);
+  const [addSectionError, setAddSectionError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([readConfig(), readResume()])
-      .then(([cfg, resume]) => {
+    (async () => {
+      try {
+        const cfg = await readConfig();
         setConfig(cfg || {});
-        setSavedTemplate((cfg?.template as string) || "");
-        setSavedDefaultFontSize((cfg?.defaultFontSize as number) || 10);
         if (cfg?.modelConfig) {
           const mc = cfg.modelConfig as Record<string, string>;
           getApiKey(mc.provider || "").then(setApiKeyState).catch(() => {});
         }
-        if (resume) {
-          const order = (cfg?.sectionOrder as string[]) || [];
-          const sections = buildSectionMap(resume, order);
-          setMasterResume(resume);
-          setEditedResume(resume);
-          setDisplaySections(sections);
+        const activeId = (cfg?.activeProfile as string) || null;
+        if (activeId) {
+          const [shared, profile] = await Promise.all([readShared(), readProfileResume(activeId)]);
+          if (shared || profile) {
+            const merged = { ...(profile || {}), ...(shared || {}) };
+            const order = getDefaultSectionOrderFromConfig(cfg || {});
+            setMasterResume(merged);
+            setEditedResume(merged);
+            setDisplaySections(buildSectionMap(merged, order));
+          }
         }
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
+
+  // Allow deep-linking to a specific settings tab, e.g. /settings?tab=layout
+  useEffect(() => {
+    const params = new URLSearchParams(location.search || "");
+    const tab = params.get("tab");
+    if (!tab) return;
+    const allowed: SettingsNavId[] = ["layout", "resume", "profiles", "prefs", "model", "appearance", "danger"];
+    if (allowed.includes(tab as SettingsNavId)) {
+      setActiveNav(tab as SettingsNavId);
+    }
+  }, [location.search]);
+
+  // Refresh profiles list every time the profiles tab becomes active.
+  useEffect(() => {
+    if (activeNav === "profiles") {
+      refresh();
+    }
+  }, [activeNav]);
+
+  // If backend profiles exist, prefer server-backed shared/profile data for Master Resume editing.
+  useEffect(() => {
+    if (!activeProfileId) return;
+    if (profiles.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [shared, profile] = await Promise.all([getShared(), getProfileResume(activeProfileId)]);
+        if (cancelled) return;
+        setEditedShared(shared || {});
+        setEditedProfile(profile || {});
+
+        const merged = { ...(profile || {}), ...(shared || {}) };
+        setMasterResume(merged);
+        setEditedResume(merged);
+        const order = getDefaultSectionOrderFromConfig(config || {});
+        setDisplaySections(buildSectionMap(merged, order));
+      } catch {
+        // If server endpoints aren't available, keep local persistence behavior.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProfileId, profiles.length, config]);
 
   useEffect(() => {
     if (!editedResume || !config) return;
-    const order = (config.sectionOrder as string[]) || [];
+    const order = getDefaultSectionOrderFromConfig(config);
     setDisplaySections(buildSectionMap(editedResume, order));
   }, [editedResume, config]);
 
@@ -157,8 +298,6 @@ export default function Settings() {
       const provider = (safeModel as { provider?: string })?.provider || "";
       if (provider) await setApiKey(provider, apiKey).catch(() => {});
       setConfigDirty(false);
-      setSavedTemplate((config?.template as string) || "");
-      setSavedDefaultFontSize((config?.defaultFontSize as number) || 10);
       setConfigSaved(true);
       setTimeout(() => setConfigSaved(false), 2000);
     } finally {
@@ -167,7 +306,18 @@ export default function Settings() {
   }
 
   function handleSectionChange(key: string, newContent: unknown) {
-    setEditedResume((prev) => (prev ? { ...prev, [key]: newContent } : prev));
+    // If server-backed profiles are active, keep shared/profile parts split.
+    if (activeProfileId && profiles.length > 0) {
+      if (key === "basics" || key === "education") {
+        setEditedShared((prev) => ({ ...(prev || {}), [key]: newContent }));
+        setEditedResume((prev) => (prev ? { ...prev, [key]: newContent } : prev));
+      } else {
+        setEditedProfile((prev) => ({ ...(prev || {}), [key]: newContent }));
+        setEditedResume((prev) => (prev ? { ...prev, [key]: newContent } : prev));
+      }
+    } else {
+      setEditedResume((prev) => (prev ? { ...prev, [key]: newContent } : prev));
+    }
     setResumeDirty(true);
     setSuggestions(null);
   }
@@ -175,6 +325,9 @@ export default function Settings() {
   function handleResetSection(key: string) {
     if (masterResume?.[key] !== undefined) {
       setEditedResume((prev) => (prev ? { ...prev, [key]: masterResume[key] } : prev));
+      if (activeProfileId && profiles.length > 0 && (key === "basics" || key === "education")) {
+        setEditedShared((prev) => ({ ...(prev || {}), [key]: masterResume[key] }));
+      }
     }
   }
 
@@ -198,6 +351,9 @@ export default function Settings() {
     }
     const data = await res.json();
     setEditedResume((prev) => (prev ? { ...prev, [key]: data.content } : prev));
+    if (activeProfileId && profiles.length > 0 && (key === "basics" || key === "education")) {
+      setEditedShared((prev) => ({ ...(prev || {}), [key]: data.content }));
+    }
     setResumeDirty(true);
   }
 
@@ -206,6 +362,8 @@ export default function Settings() {
     setSyncing(true);
     setSyncError(null);
     setSuggestions(null);
+    setDismissedReviewBanner(false);
+    setShowReviewErrorDetails(false);
 
     try {
       const llmConfig = await fullLlmConfig();
@@ -234,6 +392,8 @@ export default function Settings() {
       }
     } catch (e: unknown) {
       setSyncError(e instanceof Error ? e.message : "Sync failed");
+      // Keep suggestions cleared so UI doesn't imply "all clear"
+      setSuggestions(null);
     } finally {
       setSyncing(false);
     }
@@ -243,7 +403,14 @@ export default function Settings() {
     if (!editedResume) return;
     setResumeSaving(true);
     try {
-      await writeResume(editedResume);
+      if (activeProfileId && profiles.length > 0) {
+        await Promise.all([
+          putShared(editedShared || {}).catch(() => {}),
+          putProfileResume(activeProfileId, editedProfile || {}).catch(() => {}),
+        ]);
+      } else {
+        await writeResume(editedResume);
+      }
       setMasterResume(editedResume);
       setResumeDirty(false);
       setSuggestions(null);
@@ -259,11 +426,107 @@ export default function Settings() {
   }
 
   async function handleReset() {
-    if (!confirm("This will clear your resume data and run setup again. Continue?")) return;
-    const prev = (await readConfig()) || {};
-    await writeConfig({ ...prev, setupComplete: false });
-    await writeResume({});
+    await resetAll();
+    // Clear all localStorage keys so stale data doesn't re-seed the wiped files
+    Object.keys(localStorage)
+      .filter(k => k.startsWith("re_"))
+      .forEach(k => localStorage.removeItem(k));
     navigate("/setup");
+  }
+
+  const splitResumeSources = Boolean(activeProfileId && profiles.length > 0);
+  const resumeEditorSections = useMemo(() => {
+    if (!displaySections) return null;
+    if (!splitResumeSources) return displaySections;
+    const o: Record<string, unknown> = {};
+    if (displaySections.basics !== undefined) o.basics = displaySections.basics;
+    if (displaySections.education !== undefined) o.education = displaySections.education;
+    return Object.keys(o).length ? o : null;
+  }, [displaySections, splitResumeSources]);
+
+  const resumeEditorOriginal = useMemo(() => {
+    if (!masterResume) return null;
+    if (!splitResumeSources) return masterResume;
+    const o: Record<string, unknown> = {};
+    if (masterResume.basics !== undefined) o.basics = masterResume.basics;
+    if (masterResume.education !== undefined) o.education = masterResume.education;
+    return Object.keys(o).length ? o : null;
+  }, [masterResume, splitResumeSources]);
+
+  const profileResumeForFilter = splitResumeSources ? editedProfile : null;
+  const visibleLayoutKeys = useMemo(() => computeSectionsWithData(profileResumeForFilter), [profileResumeForFilter, activeProfileId]);
+  const visibleLayoutKeySet = useMemo(() => new Set<string>(visibleLayoutKeys), [visibleLayoutKeys]);
+
+  const currentDefaultOrder = useMemo(() => getDefaultSectionOrderFromConfig(config), [config]);
+  const visibleLayoutOrder = useMemo(() => {
+    const base = currentDefaultOrder.filter((k) => visibleLayoutKeySet.has(k));
+    for (const k of visibleLayoutKeys) {
+      if (!base.includes(k)) base.push(k);
+    }
+    return base;
+  }, [currentDefaultOrder, visibleLayoutKeySet, visibleLayoutKeys]);
+
+  const addableOptionalKeys = useMemo(() => {
+    const core = new Set<string>(CORE_SECTION_KEYS);
+    const known = Array.from(new Set(currentDefaultOrder));
+    return known.filter((k) => !core.has(k) && !visibleLayoutKeySet.has(k));
+  }, [currentDefaultOrder, visibleLayoutKeySet]);
+
+  async function deleteSectionFromActiveProfile(sectionKey: string) {
+    if (!activeProfileId || !splitResumeSources) return;
+    try {
+      const current = await getProfileResume(activeProfileId);
+      if (current && typeof current === "object") {
+        const next = { ...(current as Record<string, unknown>) };
+        delete next[sectionKey];
+        await putProfileResume(activeProfileId, next);
+        setEditedProfile(next);
+        // merged view is recomputed by effects
+      }
+    } catch (e: unknown) {
+      setProfileError(e instanceof Error ? e.message : "Could not delete section");
+    }
+  }
+
+  function seedSectionValue(key: string): unknown {
+    if (key === "certifications") return [{ name: "", issuer: "", date: "" }];
+    if (key === "publications") return [{ title: "", journal: "", date: "", link: "" }];
+    if (key === "awards") return [{}];
+    if (key === "volunteer") return [{}];
+    if (key === "languages") return [{ language: "", fluency: "" }];
+    return [{}];
+  }
+
+  async function handleConfirmAddSection() {
+    if (!splitResumeSources) return;
+    if (!activeProfileId) return;
+    setAddSectionBusy(true);
+    setAddSectionError(null);
+    try {
+      if (addSectionScope === "profile") {
+        const current = await getProfileResume(activeProfileId);
+        const next = { ...(current || {}) } as Record<string, unknown>;
+        if (next[addSectionKey] === undefined) next[addSectionKey] = seedSectionValue(addSectionKey);
+        await putProfileResume(activeProfileId, next);
+        setEditedProfile(next);
+      } else {
+        // All profiles
+        for (const p of profiles) {
+          const current = await getProfileResume(p.id);
+          const next = { ...(current || {}) } as Record<string, unknown>;
+          if (next[addSectionKey] === undefined) next[addSectionKey] = seedSectionValue(addSectionKey);
+          await putProfileResume(p.id, next);
+        }
+        // Refresh the active profile's data in memory
+        const refreshed = await getProfileResume(activeProfileId);
+        setEditedProfile(refreshed || {});
+      }
+      setAddSectionOpen(false);
+    } catch (e: unknown) {
+      setAddSectionError(e instanceof Error ? e.message : "Could not add section");
+    } finally {
+      setAddSectionBusy(false);
+    }
   }
 
   if (loading) {
@@ -275,13 +538,17 @@ export default function Settings() {
   }
 
   const mc = (config?.modelConfig as Record<string, string>) || {};
-  const modelSubtitle = mc.provider ? `${mc.provider} · ${mc.model || "—"}` : "Not configured";
+  const modelSubtitle = mc.provider ? `${mc.provider} · ${mc.model || "none"}` : "Not configured";
   const instructionText = (config?.userInstructions as string) || "";
   const prefsSubtitle = instructionText
     ? instructionText.split("\n")[0].slice(0, 48) + (instructionText.length > 48 ? "…" : "")
     : "No custom instructions";
   const resumeName = (masterResume?.basics as { name?: string })?.name;
-  const resumeSubtitle = resumeName || (masterResume ? "Edit resume content" : "No resume found");
+  const resumeSubtitle =
+    activeProfileId && profiles.length > 0
+      ? "Basics and education, shared across all profiles"
+      : resumeName || (masterResume ? "Edit resume content" : "No resume found");
+
   const currentTheme = (config?.theme as string) || "system";
   const pageHeading = SETTINGS_NAV.find((n) => n.id === activeNav)?.label ?? "Settings";
 
@@ -292,7 +559,9 @@ export default function Settings() {
       <div className="flex min-w-0 flex-1 p-3">
         <Surface variant="panel" className="flex min-w-0 flex-1 overflow-hidden !shadow-glass dark:!shadow-glass-dark">
           <Surface variant="rail" className="flex w-56 shrink-0 flex-col !rounded-none rounded-l-[12px] border-y-0 border-l-0 p-3">
-            <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">Settings</p>
+            <TypographyMuted className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+              Settings
+            </TypographyMuted>
             <div className="flex flex-col gap-0.5">
               {SETTINGS_NAV.map((item) => (
                 <Button
@@ -316,50 +585,64 @@ export default function Settings() {
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
             <header className="flex shrink-0 items-center justify-between gap-4 border-b border-gray-200/70 px-6 py-3 dark:border-white/10">
               <div>
-                <h1 className="text-lg font-semibold capitalize text-gray-900 dark:text-gray-100">{pageHeading}</h1>
+                <h1 className="text-[17px] font-semibold tracking-tight text-gray-900 dark:text-gray-100">{pageHeading}</h1>
                 {activeNav === "layout" && (
-                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  <TypographyMuted className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
                     {TEMPLATE_LABELS[config?.template as string] || "Not set"} · {(config?.defaultFontSize as number) || 10}pt default
-                  </p>
+                  </TypographyMuted>
                 )}
                 {activeNav === "model" && (
-                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{modelSubtitle}</p>
+                  <TypographyMuted className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{modelSubtitle}</TypographyMuted>
                 )}
                 {activeNav === "prefs" && (
-                  <p className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">{prefsSubtitle}</p>
+                  <TypographyMuted className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">{prefsSubtitle}</TypographyMuted>
                 )}
                 {activeNav === "resume" && (
-                  <p className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">{resumeSubtitle}</p>
+                  <TypographyMuted className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">{resumeSubtitle}</TypographyMuted>
                 )}
                 {activeNav === "appearance" && (
-                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{THEME_LABELS[currentTheme] || "System"}</p>
+                  <TypographyMuted className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {THEME_LABELS[currentTheme] || "System"}
+                  </TypographyMuted>
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <Button type="button" variant="secondary" size="sm" className="shrink-0">
-                  <Sparkles data-icon="inline-start" />
-                  Demo
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleSaveConfig}
-                  disabled={!configDirty || configSaving}
-                  className="shrink-0"
-                >
-                  <Save data-icon="inline-start" />
-                  {configSaved ? "Saved" : configSaving ? "Saving…" : "Save"}
-                </Button>
+                {activeNav === "resume" ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleSyncAndSave}
+                    disabled={!resumeDirty || syncing || resumeSaving}
+                    className="shrink-0"
+                    title={!resumeDirty ? "Make a change to review again" : undefined}
+                  >
+                    <Sparkles data-icon="inline-start" />
+                    {syncing ? "Checking…" : resumeSaving ? "Saving…" : "Review"}
+                  </Button>
+                ) : null}
+                {activeNav !== "danger" ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleSaveConfig}
+                    disabled={!configDirty || configSaving}
+                    className="shrink-0"
+                  >
+                    <Save data-icon="inline-start" />
+                    {configSaved ? "Saved" : configSaving ? "Saving…" : "Save"}
+                  </Button>
+                ) : null}
               </div>
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
               {activeNav === "layout" && (
-                <div className="mx-auto max-w-3xl space-y-5">
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                <div className="mx-auto w-full max-w-5xl space-y-5">
+                  <TypographyMuted className="text-xs text-gray-500 dark:text-gray-400">
                     The template only changes how your resume is styled. Your content stays the same.
-                  </p>
+                  </TypographyMuted>
                   <div className="grid grid-cols-2 gap-4">
                     {Object.entries(TEMPLATE_LABELS).map(([id, name]) => {
                       const isSelected = config?.template === id;
@@ -375,59 +658,20 @@ export default function Settings() {
                               updateConfig({ template: id });
                             }
                           }}
-                          className={`cursor-pointer overflow-hidden rounded-card border-2 transition-all ${
-                            isSelected
-                              ? "border-brand-600 ring-2 ring-brand-200 dark:ring-brand-800"
-                              : "border-gray-200 hover:border-gray-300 dark:border-gray-600 dark:hover:border-gray-500"
-                          }`}
+                          className="cursor-pointer"
                         >
-                          <div className="group relative overflow-hidden bg-white" style={{ aspectRatio: "8.5/11" }}>
-                            <object
-                              data={`${SIDECAR}/template-preview-pdf/${id}#toolbar=0&navpanes=0&scrollbar=0`}
-                              type="application/pdf"
-                              style={{ width: "100%", height: "100%", display: "block" }}
-                            />
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-all group-hover:bg-black/25">
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setPreviewModal(id);
-                                }}
-                                className="pointer-events-auto rounded-full px-3 py-1.5 text-xs font-semibold opacity-0 shadow-md transition-opacity group-hover:pointer-events-auto group-hover:opacity-100"
-                              >
-                                Full preview
-                              </Button>
-                            </div>
-                          </div>
-                          <div
-                            className={`flex items-center justify-between px-3 py-2 ${
-                              isSelected ? "bg-brand-50 dark:bg-brand-900/20" : "bg-white dark:bg-[#2C2C2E]"
-                            }`}
-                          >
-                            <span
-                              className={`truncate text-xs font-medium ${
-                                isSelected ? "text-brand-700 dark:text-brand-400" : "text-gray-700 dark:text-gray-300"
-                              }`}
-                            >
-                              {name}
-                            </span>
-                            {isSelected && (
-                              <span className="ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-brand-600">
-                                <svg className="h-2.5 w-2.5 text-white" fill="currentColor" viewBox="0 0 12 12">
-                                  <path d="M10 3L5 8.5 2 5.5l-1 1 4 4 6-7-1-1z" />
-                                </svg>
-                              </span>
-                            )}
-                          </div>
+                          <TemplateThumb
+                            id={id}
+                            name={name}
+                            selected={isSelected}
+                            onOpenPreview={() => setPreviewModal(id)}
+                          />
                         </div>
                       );
                     })}
                   </div>
                   <div>
-                    <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">Default font size</label>
+                    <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">Default Font Size</label>
                     <div className="flex max-w-full flex-wrap items-center gap-1.5">
                       <SegmentedControl
                         className="max-w-[min(268px,100%)]"
@@ -439,13 +683,35 @@ export default function Settings() {
                       <span className="shrink-0 text-[13px] font-medium tabular-nums text-gray-500 dark:text-gray-400">pt</span>
                     </div>
                   </div>
-                  {((config?.template as string) !== savedTemplate || (config?.defaultFontSize as number) !== savedDefaultFontSize) && (
-                    <div className="flex justify-end pt-1">
-                      <Button type="button" onClick={handleSaveConfig} disabled={configSaving}>
-                        {configSaved ? "Saved" : configSaving ? "Saving…" : "Save layout"}
-                      </Button>
-                    </div>
-                  )}
+                  <div>
+                    <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">Default Section Order</label>
+                    <TypographyMuted className="mb-2 block w-full max-w-none text-xs">
+                      Drag to set the global PDF section order. Profiles can override on each profile&apos;s edit page.
+                    </TypographyMuted>
+                    {config ? (
+                      <>
+                        <SectionOrderEditor
+                          orderedKeys={visibleLayoutOrder}
+                          onReorder={(nextVisible) => {
+                            const merged = mergeVisibleReorderWithHidden({
+                              currentDefaultOrder,
+                              visibleOrder: nextVisible,
+                              visibleKeys: visibleLayoutKeySet,
+                            });
+                            updateConfig({ defaultSectionOrder: merged, sectionOrder: merged });
+                          }}
+                          onRemove={
+                            splitResumeSources
+                              ? (key) => {
+                                  void deleteSectionFromActiveProfile(key);
+                                }
+                              : undefined
+                          }
+                          canRemove={(key) => splitResumeSources && !CORE_SECTION_KEYS.includes(key as any)}
+                        />
+                      </>
+                    ) : null}
+                  </div>
                 </div>
               )}
 
@@ -465,68 +731,118 @@ export default function Settings() {
 
               {activeNav === "resume" && (
                 <div className="mx-auto max-w-3xl space-y-4">
-                  {displaySections ? (
+                  {resumeEditorSections ? (
                     <>
+                      {!dismissedReviewBanner && syncError ? (
+                        (() => {
+                          const fe = formatAiError(syncError);
+                          return (
+                        <Surface
+                          variant="inset"
+                          className="sticky top-0 z-10 -mx-2 mb-2 rounded-xl border border-red-200/80 bg-red-50/80 p-3 shadow-sm backdrop-blur-sm dark:border-red-800/60 dark:bg-red-950/35"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-red-900 dark:text-red-100">{fe.title}</div>
+                              <p className="mt-0.5 text-xs text-red-800/90 dark:text-red-200/90">{fe.message}</p>
+                              <div className="mt-2 flex items-center gap-2">
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  className="h-8 px-3"
+                                  onClick={handleSyncAndSave}
+                                  disabled={syncing || resumeSaving}
+                                >
+                                  Try again
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 px-2 text-xs text-red-800 hover:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/15"
+                                  onClick={() => setShowReviewErrorDetails((v) => !v)}
+                                >
+                                  {showReviewErrorDetails ? "Hide details" : "Details"}
+                                </Button>
+                              </div>
+                              {showReviewErrorDetails ? (
+                                <pre className="mt-2 overflow-auto rounded-lg bg-white/60 p-2 text-[11px] text-red-900/90 dark:bg-black/20 dark:text-red-100">
+                                  {fe.raw}
+                                </pre>
+                              ) : null}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {typeof fe.code === "number" ? (
+                                <span className="shrink-0 rounded-full bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-800 dark:bg-red-500/15 dark:text-red-200">
+                                  {fe.code}
+                                </span>
+                              ) : null}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 rounded-lg text-red-700 hover:bg-red-500/10 hover:text-red-900 dark:text-red-200 dark:hover:bg-red-500/15"
+                                onClick={() => setDismissedReviewBanner(true)}
+                                aria-label="Dismiss"
+                                title="Dismiss"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                        </Surface>
+                          );
+                        })()
+                      ) : !dismissedReviewBanner && suggestions !== null ? (
+                        <Surface
+                          variant="inset"
+                          className="sticky top-0 z-10 -mx-2 mb-2 rounded-xl border border-white/40 bg-white/70 p-3 shadow-sm backdrop-blur-sm dark:border-white/10 dark:bg-white/[0.06]"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">
+                                Review
+                                {suggestions.length > 0
+                                  ? ` · ${suggestions.length} note${suggestions.length !== 1 ? "s" : ""}`
+                                  : " · All clear"}
+                              </div>
+                              <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">
+                                {suggestions.length > 0
+                                  ? "Notes are shown inline inside each section so you can fix them in place."
+                                  : "No issues found. You can save now."}
+                              </p>
+                            </div>
+                            {suggestions.length === 0 ? (
+                              <span className="shrink-0 rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                                Saved
+                              </span>
+                            ) : null}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 rounded-lg text-gray-500 hover:bg-black/[0.06] hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
+                              onClick={() => setDismissedReviewBanner(true)}
+                              aria-label="Dismiss"
+                              title="Dismiss"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </Surface>
+                      ) : null}
                       <ResumeEditor
-                        sections={displaySections}
-                        originalSections={masterResume}
+                        sections={resumeEditorSections}
+                        originalSections={resumeEditorOriginal}
                         onSectionChange={handleSectionChange}
                         onReaskSection={handleReaskSection}
                         onResetSection={handleResetSection}
-                        label="Sections"
+                        label={splitResumeSources ? "Basics & education" : "Sections"}
                         showReask={true}
+                        suggestions={suggestions}
                       />
-                      {syncError && (
-                        <div className="rounded-xl border border-red-200 bg-red-50/90 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
-                          {syncError}
-                        </div>
-                      )}
-                      {suggestions !== null && (
-                        <div className="overflow-hidden rounded-card border border-gray-200 dark:border-gray-600">
-                          <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-[#323234]">
-                            <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">
-                              Review
-                              {suggestions.length > 0
-                                ? ` · ${suggestions.length} note${suggestions.length !== 1 ? "s" : ""}`
-                                : " · All clear"}
-                            </span>
-                            {suggestions.length === 0 && <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Saved</span>}
-                          </div>
-                          {suggestions.length > 0 && (
-                            <div className="divide-y divide-gray-100 dark:divide-gray-700">
-                              {suggestions.map((s, i) => {
-                                const style = SUGGESTION_STYLES[s.type] || SUGGESTION_STYLES.info;
-                                return (
-                                  <div key={i} className={`flex items-start gap-3 px-4 py-3 ${style.bg}`}>
-                                    <span className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold capitalize ${style.badge}`}>{s.type}</span>
-                                    <div>
-                                      <span className="mr-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">{s.section}</span>
-                                      <span className={`text-sm ${style.text}`}>{s.message}</span>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                          {suggestions.length > 0 && (
-                            <div className="flex justify-end gap-3 border-t border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-[#323234]">
-                              <Button type="button" variant="secondary" size="sm" onClick={() => setSuggestions(null)}>
-                                Keep editing
-                              </Button>
-                              <Button type="button" size="sm" onClick={saveResume} disabled={resumeSaving}>
-                                {resumeSaving ? "Saving…" : "Save anyway"}
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {suggestions === null && (
-                        <div className="flex justify-end">
-                          <Button type="button" onClick={handleSyncAndSave} disabled={syncing || resumeSaving}>
-                            {syncing ? "Checking…" : resumeSaving ? "Saving…" : "Save & review"}
-                          </Button>
-                        </div>
-                      )}
+                      {/* syncError is shown in the sticky banner above */}
                     </>
                   ) : (
                     <p className="py-8 text-center text-sm text-gray-400 dark:text-gray-500">No resume on file yet. Complete setup first.</p>
@@ -544,7 +860,7 @@ export default function Settings() {
                       placeholder={`Examples:\n• Quantify results where you can\n• Avoid buzzwords you dislike\n• Keep a calm, professional tone`}
                       value={instructionText}
                       onChange={(e) => updateConfig({ userInstructions: e.target.value })}
-                      className="w-full resize-none rounded-xl border border-gray-200 bg-[#F5F5F7]/80 px-4 py-3 text-sm text-gray-900 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 dark:border-gray-600 dark:bg-[#1C1C1E] dark:text-gray-100"
+                      className="w-full resize-none rounded-xl border border-gray-200/80 bg-white/70 px-4 py-3 text-sm leading-relaxed text-gray-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] backdrop-blur-sm focus:outline-none focus-visible:shadow-focus dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100"
                     />
                   </div>
                   <div>
@@ -554,11 +870,12 @@ export default function Settings() {
                         type="text"
                         value={(config?.savePath as string) || "~/Documents/Resumes"}
                         onChange={(e) => updateConfig({ savePath: e.target.value })}
-                        className="flex-1 rounded-xl border border-gray-200 bg-white px-3 py-2 font-mono text-sm text-gray-900 focus:border-brand-500 focus:outline-none dark:border-gray-600 dark:bg-[#1C1C1E] dark:text-gray-100"
+                        className="flex-1 rounded-xl border border-gray-200/80 bg-white/70 px-3 py-2 font-mono text-sm text-gray-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] backdrop-blur-sm focus:outline-none focus-visible:shadow-focus dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100"
                       />
                       <Button
                         type="button"
                         variant="secondary"
+                        size="sm"
                         className="shrink-0"
                         onClick={async () => {
                           try {
@@ -570,6 +887,7 @@ export default function Settings() {
                           }
                         }}
                       >
+                        <FolderOpen data-icon="inline-start" />
                         Browse…
                       </Button>
                     </div>
@@ -588,11 +906,103 @@ export default function Settings() {
                 </div>
               )}
 
+              {activeNav === "profiles" && (
+                <div className="mx-auto w-full max-w-2xl space-y-4">
+                  <div className="flex items-end justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                        Profiles ({profiles.length}/3 used)
+                      </div>
+                      <TypographyMuted className="mt-1 text-xs">
+                        Switch profiles to tailor different versions of your resume for different roles.
+                      </TypographyMuted>
+                    </div>
+                    {profiles.length < 3 ? (
+                      <Button type="button" variant="secondary" size="sm" onClick={() => setCreateProfileOpen(true)}>
+                        + Add profile ({3 - profiles.length} remaining)
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  {profileError ? (
+                    <div className="rounded-xl border border-red-200/70 bg-red-50/80 px-3 py-2 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-200">
+                      {profileError}
+                    </div>
+                  ) : null}
+
+                  <Surface variant="inset" className="rounded-xl p-2">
+                    <div className="divide-y divide-gray-200/60 dark:divide-white/10">
+                      {profiles.map((p) => {
+                        const isActive = p.id === activeProfileId;
+                        return (
+                          <div key={p.id} className="flex items-center justify-between gap-3 px-2 py-2.5">
+                            <button
+                              type="button"
+                              className={cn(
+                                "flex min-w-0 flex-1 items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors",
+                                "hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                              )}
+                              onClick={async () => {
+                                try {
+                                  setProfileError(null);
+                                  await switchTo(p.id);
+                                } catch (e: unknown) {
+                                  setProfileError(e instanceof Error ? e.message : "Could not switch profile");
+                                }
+                              }}
+                            >
+                              <span className={cn("text-sm", isActive ? "text-gray-900 dark:text-gray-100" : "text-gray-700 dark:text-gray-200")}>
+                                {isActive ? "●" : "○"}
+                              </span>
+                              <span className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{p.name}</span>
+                            </button>
+
+                            <div className="flex shrink-0 items-center gap-2">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => navigate(`/settings/profile/${p.id}/edit`)}
+                                title="Edit profile sections"
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="text-red-700 hover:bg-red-500/10 hover:text-red-900 dark:text-red-300 dark:hover:bg-red-500/15"
+                                onClick={() => setDeleteConfirm({ id: p.id, name: p.name })}
+                              >
+                                Delete
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {profiles.length === 0 ? (
+                        <div className="px-3 py-10 text-center">
+                          <TypographyMuted>No profiles found. Create one to get started.</TypographyMuted>
+                        </div>
+                      ) : null}
+                    </div>
+                  </Surface>
+                </div>
+              )}
+
               {activeNav === "danger" && (
                 <div className="mx-auto max-w-lg space-y-4">
                   <p className="text-sm text-gray-600 dark:text-gray-300">Start fresh with setup. Exported files on your computer are not removed.</p>
-                  <Button type="button" variant="destructive" onClick={handleReset}>
-                    Reset and run setup again
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="rounded-btn border-red-200/80 bg-red-50/80 text-red-800 hover:bg-red-50 dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-200 dark:hover:bg-red-950/55"
+                    onClick={() => setResetOpen(true)}
+                  >
+                    <Trash2 data-icon="inline-start" />
+                    Reset
                   </Button>
                 </div>
               )}
@@ -602,10 +1012,266 @@ export default function Settings() {
       </div>
 
       <Modal
+        open={resetOpen}
+        onOpenChange={setResetOpen}
+        title="Reset app?"
+        description="Clears your saved resume + settings inside the app. Exported PDFs on your computer are not removed."
+        descriptionClassName="text-brand-700 dark:text-brand-300"
+        className="w-[min(420px,92vw)]"
+        overlayClassName="bg-black/25"
+        dense
+        surface={false}
+        contentClassName="rounded-3xl border-white/55 bg-white/80 shadow-[0_22px_70px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.08] dark:shadow-[0_28px_90px_rgba(0,0,0,0.55)]"
+        headerClassName="px-4 py-3"
+        bodyClassName="overflow-visible"
+        footerClassName="bg-transparent px-4 py-3 dark:bg-transparent"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="secondary" size="sm" className="bg-white/70 dark:bg-white/[0.06]" onClick={() => setResetOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="border-red-200/80 bg-red-50/80 text-red-800 hover:bg-red-50 dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-200 dark:hover:bg-red-950/55"
+              onClick={async () => {
+                setResetOpen(false);
+                await handleReset();
+              }}
+            >
+              <Trash2 data-icon="inline-start" />
+              Reset
+            </Button>
+          </div>
+        }
+      >
+        <div className="px-4 pb-3 pt-2 text-[11px] text-gray-500 dark:text-gray-400">
+          This can’t be undone.
+        </div>
+      </Modal>
+
+      <Modal
+        open={createProfileOpen}
+        onOpenChange={(o) => {
+          setCreateProfileOpen(o);
+          if (!o) {
+            setNewProfileName("");
+            setNewProfileFile(null);
+            setProfileError(null);
+          }
+        }}
+        title="Create profile"
+        description="Add a role-specific resume. Max 3 profiles."
+        className="w-[min(520px,94vw)]"
+        overlayClassName="bg-black/25 backdrop-blur-md"
+        dense
+        surface={false}
+        contentClassName="rounded-3xl border-white/55 bg-white/80 shadow-[0_22px_70px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.08] dark:shadow-[0_28px_90px_rgba(0,0,0,0.55)]"
+        headerClassName="px-4 py-3"
+        bodyClassName="overflow-visible"
+        footerClassName="border-t border-white/25 bg-white/45 px-4 py-3 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.06]"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="secondary" size="sm" className="bg-white/70 dark:bg-white/[0.06]" onClick={() => setCreateProfileOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={creatingProfile || profiles.length >= 3 || !newProfileName.trim() || !newProfileFile}
+              onClick={async () => {
+                if (profiles.length >= 3) {
+                  setProfileError("You already have 3 profiles. Delete one to add another.");
+                  return;
+                }
+                if (!newProfileName.trim() || !newProfileFile) return;
+                setCreatingProfile(true);
+                setProfileError(null);
+                try {
+                  const llmConfig = await fullLlmConfig();
+                  await createProfile({ name: newProfileName.trim(), resumeFile: newProfileFile, llm_config: llmConfig });
+                  await refresh();
+                  setCreateProfileOpen(false);
+                } catch (e: unknown) {
+                  setProfileError(e instanceof Error ? e.message : "Could not create profile");
+                } finally {
+                  setCreatingProfile(false);
+                }
+              }}
+            >
+              {creatingProfile ? "Creating…" : "Create"}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4 px-5 pb-5 pt-3">
+          {profileError ? (
+            <div className="rounded-xl border border-red-200/70 bg-red-50/80 px-3 py-2 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-200">
+              {profileError}
+            </div>
+          ) : null}
+          <RoleCombobox
+            value={newProfileName}
+            onChange={setNewProfileName}
+            label="Job title"
+            inputId="settings-create-profile-role"
+          />
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Upload resume file</label>
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx,.tex,.txt"
+              onChange={(e) => setNewProfileFile(e.target.files?.[0] || null)}
+              className="block w-full cursor-pointer rounded-xl border border-gray-200/70 bg-white/50 px-3 py-2 text-sm text-gray-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.5)] file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-brand-600 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-brand-700 dark:border-white/12 dark:bg-white/[0.06] dark:text-gray-200 dark:file:bg-brand-500 dark:hover:file:bg-brand-600"
+            />
+            {newProfileFile ? (
+              <TypographyMuted className="mt-1 text-xs">Selected: {newProfileFile.name}</TypographyMuted>
+            ) : null}
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={!!deleteConfirm}
+        onOpenChange={(o) => !o && setDeleteConfirm(null)}
+        title={deleteConfirm ? `Delete “${deleteConfirm.name}”?` : "Delete profile?"}
+        description="This removes the profile from the app."
+        className="w-[min(520px,94vw)]"
+        overlayClassName="bg-black/25 backdrop-blur-md"
+        dense
+        surface={false}
+        contentClassName="rounded-3xl border-white/55 bg-white/80 shadow-[0_22px_70px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.08] dark:shadow-[0_28px_90px_rgba(0,0,0,0.55)]"
+        headerClassName="px-4 py-3"
+        bodyClassName="overflow-visible"
+        footerClassName="border-t border-white/25 bg-white/45 px-4 py-3 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.06]"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="secondary" size="sm" className="bg-white/70 dark:bg-white/[0.06]" onClick={() => setDeleteConfirm(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="border-red-200/80 bg-red-50/80 text-red-800 hover:bg-red-50 dark:border-red-800/60 dark:bg-red-950/40 dark:text-red-200 dark:hover:bg-red-950/55"
+              onClick={async () => {
+                if (!deleteConfirm) return;
+                try {
+                  setProfileError(null);
+                  await deleteProfileApi(deleteConfirm.id);
+                  setDeleteConfirm(null);
+                  await refresh();
+                } catch (e: unknown) {
+                  setProfileError(e instanceof Error ? e.message : "Could not delete profile");
+                }
+              }}
+            >
+              <Trash2 data-icon="inline-start" />
+              Delete
+            </Button>
+          </div>
+        }
+      >
+        <div className="px-5 pb-5 pt-3 text-xs text-gray-500 dark:text-gray-400">This can’t be undone.</div>
+      </Modal>
+
+      <Modal
+        open={addSectionOpen}
+        onOpenChange={(o) => {
+          setAddSectionOpen(o);
+          if (!o) setAddSectionError(null);
+        }}
+        title="Add this section to:"
+        description="Choose whether this section should exist on one profile or across all profiles."
+        className="w-[min(520px,94vw)]"
+        overlayClassName="bg-black/25 backdrop-blur-md"
+        dense
+        surface={false}
+        contentClassName="rounded-3xl border-white/55 bg-white/80 shadow-[0_22px_70px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.08] dark:shadow-[0_28px_90px_rgba(0,0,0,0.55)]"
+        headerClassName="border-b border-white/25 bg-white/45 px-5 py-4 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.06]"
+        bodyClassName="overflow-visible bg-transparent"
+        footerClassName="border-t border-white/25 bg-white/45 px-5 py-4 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.06]"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="secondary" size="sm" className="bg-white/70 dark:bg-white/[0.06]" onClick={() => setAddSectionOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={addSectionBusy || addableOptionalKeys.length === 0}
+              onClick={() => void handleConfirmAddSection()}
+            >
+              {addSectionBusy ? "Adding…" : "Confirm"}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4 px-5 pb-5 pt-3">
+          {addSectionError ? (
+            <div className="rounded-xl border border-red-200/70 bg-red-50/80 px-3 py-2 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-200">
+              {addSectionError}
+            </div>
+          ) : null}
+
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Section</label>
+            <select
+              value={addSectionKey}
+              onChange={(e) => setAddSectionKey(e.target.value)}
+              className="h-10 w-full rounded-xl border border-gray-200/80 bg-white/70 px-3 text-sm font-medium text-gray-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] backdrop-blur-sm focus:outline-none focus-visible:shadow-focus dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100"
+            >
+              {addableOptionalKeys.map((k) => (
+                <option key={k} value={k}>
+                  {SECTION_LABELS[k] || k}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Add this section to:</label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+              <input
+                type="radio"
+                name="add-section-scope"
+                checked={addSectionScope === "profile"}
+                onChange={() => setAddSectionScope("profile")}
+              />
+              <span>
+                This profile only{" "}
+                <span className="text-gray-500 dark:text-gray-400">
+                  ({profiles.find((p) => p.id === activeProfileId)?.name || "Active profile"})
+                </span>
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+              <input
+                type="radio"
+                name="add-section-scope"
+                checked={addSectionScope === "all"}
+                onChange={() => setAddSectionScope("all")}
+              />
+              <span>All profiles</span>
+            </label>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
         open={!!previewModal}
         onOpenChange={(open) => !open && setPreviewModal(null)}
         title={previewModal ? TEMPLATE_LABELS[previewModal] : "Preview"}
         className="w-[min(900px,96vw)]"
+        overlayClassName="bg-black/25 backdrop-blur-md"
+        surface={false}
+        contentClassName="rounded-3xl border-white/55 bg-white/80 shadow-[0_22px_70px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.08] dark:shadow-[0_28px_90px_rgba(0,0,0,0.55)]"
+        headerClassName="border-b border-white/25 bg-white/45 px-5 py-2 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.06]"
+        bodyClassName="bg-transparent"
+        footerClassName="border-t border-white/25 bg-white/45 px-5 py-3 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.06]"
         footer={
           <p className="text-center text-[11px] text-gray-500 dark:text-gray-400">Sample preview · scroll to see the full page</p>
         }
@@ -614,7 +1280,7 @@ export default function Settings() {
           <div className="h-[min(78vh,760px)] min-h-[420px] w-full bg-neutral-200 dark:bg-neutral-700">
             <object
               key={previewModal}
-              data={`${SIDECAR}/template-preview-pdf/${previewModal}#toolbar=1&navpanes=0`}
+              data={`${SIDECAR}/template-preview-pdf/${previewModal}?v=${PREVIEW_ASSET_VERSION}#toolbar=1&navpanes=0`}
               type="application/pdf"
               className="h-full w-full"
               style={{ display: "block" }}

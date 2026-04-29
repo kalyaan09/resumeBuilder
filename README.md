@@ -1,6 +1,6 @@
 # Resume Builder
 
-A local desktop app for AI-powered resume editing. Upload a `.docx` resume template, edit sections with AI assistance, and export a polished PDF — all running locally on your machine.
+A local desktop app for AI-powered resume editing. Upload a `.docx` resume template, edit sections with AI assistance, and export a polished PDF, all running locally on your machine.
 
 ## Tech Stack
 
@@ -11,7 +11,7 @@ A local desktop app for AI-powered resume editing. Upload a `.docx` resume templ
 
 ## Features
 
-- Upload a `.docx` resume template — sections are detected dynamically
+- Upload a `.docx` resume template; sections are detected dynamically
 - AI rewrites individual sections based on your experience level
 - Supports new grad (1-page) and mid/senior (2-page) formats
 - PDF export via LibreOffice/docx2pdf (falls back to WeasyPrint for `.tex` templates)
@@ -39,10 +39,10 @@ cd python && pip install -r requirements.txt
 ### Run in development
 
 ```bash
-# Terminal 1 — start the Python sidecar
+# Terminal 1: start the Python sidecar
 cd python && python3 main.py
 
-# Terminal 2 — start the frontend
+# Terminal 2: start the frontend
 npm run dev
 ```
 

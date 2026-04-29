@@ -2,12 +2,19 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { forwardRef, type HTMLAttributes } from "react";
 import { cn } from "./cn";
 
-const surfaceVariants = cva("rounded-card transition-colors duration-200", {
+const surfaceVariants = cva(
+  [
+    "rounded-card transition-colors duration-200",
+    /* Slight lift on hover for interactive surfaces (opt-in via `group` outside) */
+    "will-change-transform",
+  ].join(" "),
+  {
   variants: {
     variant: {
       panel:
         "border border-white/50 bg-surface-glass shadow-glass backdrop-blur-xl dark:border-white/10 dark:bg-surface-glass-dark dark:shadow-glass-dark dark:backdrop-blur-2xl",
-      rail: "border-r border-white/45 bg-surface-rail backdrop-blur-lg dark:border-white/10 dark:bg-surface-rail-dark dark:backdrop-blur-xl",
+      rail:
+        "border-r border-white/45 bg-surface-rail backdrop-blur-lg dark:border-white/10 dark:bg-surface-rail-dark dark:backdrop-blur-xl",
       inset:
         "border border-white/50 bg-surface-inset backdrop-blur-md dark:border-white/10 dark:bg-surface-inset-dark dark:backdrop-blur-lg",
       solid:
@@ -15,7 +22,8 @@ const surfaceVariants = cva("rounded-card transition-colors duration-200", {
     },
   },
   defaultVariants: { variant: "panel" },
-});
+  }
+);
 
 export interface SurfaceProps
   extends HTMLAttributes<HTMLDivElement>,

@@ -31,8 +31,8 @@ export function SegmentedControl<T extends string>({
       role="tablist"
       className={cn(
         "relative inline-flex w-full max-w-full rounded-[10px]",
-        /* Recessed track — iOS system gray, no outer ring */
-        "bg-[#E5E5EA] p-[3px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)] dark:bg-[#2C2C2E] dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.35)]",
+        /* Recessed track, aligned with glass language */
+        "bg-black/[0.06] p-[3px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.06)] dark:bg-white/[0.06] dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.35)]",
         className
       )}
     >
@@ -47,7 +47,7 @@ export function SegmentedControl<T extends string>({
             onClick={() => onChange(opt.value)}
             className={cn(
               "relative z-0 flex min-w-0 items-center justify-center rounded-[7px] font-medium outline-none transition-colors duration-150",
-              "focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-brand-500/35 focus-visible:ring-offset-0",
+              "focus-visible:z-10 focus-visible:shadow-focus",
               size === "sm"
                 ? "min-h-[28px] min-w-[2.1rem] flex-1 px-1.5 py-1 text-[13px] tabular-nums sm:min-w-[2.35rem] sm:px-2"
                 : "min-h-[32px] min-w-[2.5rem] flex-1 px-2 py-1.5 text-sm",
@@ -60,10 +60,10 @@ export function SegmentedControl<T extends string>({
               <motion.span
                 layoutId={thumbId}
                 className={cn(
-                  /* Nearly full segment — tiny gutter so highlight matches digit width */
+                  /* Nearly full segment with tiny gutter so highlight matches digit width */
                   "absolute -z-10 inset-[2px] rounded-[6px]",
                   "bg-white shadow-[0_2px_6px_rgba(0,0,0,0.12),0_1px_2px_rgba(0,0,0,0.06)]",
-                  "dark:bg-[#48484A] dark:shadow-[0_2px_8px_rgba(0,0,0,0.45),0_1px_2px_rgba(0,0,0,0.25)]"
+                  "dark:bg-white/[0.12] dark:shadow-[0_2px_8px_rgba(0,0,0,0.45),0_1px_2px_rgba(0,0,0,0.25)]"
                 )}
                 transition={{ type: "spring", stiffness: 420, damping: 34 }}
               />
