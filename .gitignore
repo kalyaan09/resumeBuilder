@@ -7,6 +7,8 @@ src-tauri/target/
 
 # Python
 python/__pycache__/
+python/**/__pycache__/
+**/__pycache__/
 python/*.pyc
 python/*.pyo
 python/dist/
@@ -26,3 +28,10 @@ env/
 src-tauri/binaries/
 src-tauri/target/
 python/__pycache__/
+
+# Local Claude settings (may contain secrets)
+.claude/settings.local.json
+.claude/*.local.json
+resapp/
+claude_code_gap_prompt.md
+PROJECT_DOCS.md

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import ModelPicker from "../components/ModelPicker";
 import { RoleCombobox } from "../components/RoleCombobox";
@@ -6,15 +6,22 @@ import { getApiKey, setApiKey } from "../lib/secureStore";
 import { writeConfig, writeShared, writeProfileResume, readConfig } from "../lib/persistenceStore";
 import { applyTheme, Theme } from "../lib/themeStore";
 import { useConnection } from "../context/ConnectionContext";
+import { useProfiles } from "../context/ProfilesContext";
 import { createProfile, getProfileResume, putShared, getProfiles } from "../lib/sidecarApi";
+import { readErrorDetailFromResponse } from "../lib/httpError";
+import SectionOrderEditor from "../components/SectionOrderEditor";
 import { Button, Modal, SegmentedControl, Surface, TypographyMuted } from "../ui";
-import { ArrowLeft, ArrowRight, Check, GripVertical } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check } from "lucide-react";
 
 interface SetupProps {
   onComplete: () => void;
 }
 
 type Phase = "theme" | "model" | "info" | "extracting" | "suggestion";
+
+const SIDECAR = "http://localhost:8000";
+/** Bust WebView cache for embedded template PDFs (keep in sync with Settings PREVIEW_ASSET_VERSION). */
+const TEMPLATE_PREVIEW_V = 8;
 
 const LEVELS = [
   { value: "entry", label: "New Grad / Entry (0–2 yrs)" },
@@ -47,38 +54,6 @@ const SECTION_LABELS: Record<string, string> = {
   languages: "Languages",
 };
 
-/** Full-row drag preview (native DnD only snapshots the draggable node by default, usually the grip). */
-function mountSectionDragGhost(
-  row: HTMLElement,
-  clientX: number,
-  clientY: number,
-  dataTransfer: DataTransfer,
-): HTMLDivElement {
-  const clone = row.cloneNode(true) as HTMLDivElement;
-  clone.querySelectorAll("button").forEach((el) => el.remove());
-  const rect = row.getBoundingClientRect();
-  clone.style.width = `${rect.width}px`;
-  clone.style.boxSizing = "border-box";
-  clone.style.position = "fixed";
-  clone.style.top = "-9999px";
-  clone.style.left = "-9999px";
-  clone.style.margin = "0";
-  clone.style.pointerEvents = "none";
-  clone.style.zIndex = "2147483647";
-  clone.style.transition = "none";
-  clone.style.opacity = "1";
-  clone.classList.remove("opacity-50", "opacity-60");
-  const dark = document.documentElement.classList.contains("dark");
-  clone.style.boxShadow = dark
-    ? "0 20px 44px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1)"
-    : "0 20px 44px rgba(15,23,42,0.14), 0 0 0 1px rgba(15,23,42,0.08)";
-  document.body.appendChild(clone);
-  const ox = clientX - rect.left;
-  const oy = clientY - rect.top;
-  dataTransfer.setDragImage(clone, ox, oy);
-  return clone;
-}
-
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -91,6 +66,14 @@ function fileToBase64(file: File): Promise<string> {
 export default function Setup({ onComplete }: SetupProps) {
   const navigate = useNavigate();
   const { backendReady, backendConnecting } = useConnection();
+  const { profiles } = useProfiles();
+
+  useEffect(() => {
+    if (profiles.length > 0) {
+      onComplete();
+      navigate("/editor", { replace: true });
+    }
+  }, [profiles.length, navigate, onComplete]);
 
   const [phase, setPhase] = useState<Phase>("theme");
   const [selectedTheme, setSelectedTheme] = useState<Theme>("system");
@@ -121,9 +104,6 @@ export default function Setup({ onComplete }: SetupProps) {
   const [llmWarning, setLlmWarning] = useState<string | null>(null);
   const [previewModal, setPreviewModal] = useState<string | null>(null);
   const [templatesModalOpen, setTemplatesModalOpen] = useState(false);
-  const [sectionDragIndex, setSectionDragIndex] = useState<number | null>(null);
-  const [sectionDragOverIndex, setSectionDragOverIndex] = useState<number | null>(null);
-  const sectionDragGhostRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     readConfig().then((stored) => {
@@ -186,8 +166,7 @@ export default function Setup({ onComplete }: SetupProps) {
       });
 
       if (!extractRes.ok) {
-        const err = await extractRes.json();
-        throw new Error(err.detail || "Extraction failed");
+        throw new Error(await readErrorDetailFromResponse(extractRes));
       }
 
       await extractRes.json();
@@ -201,8 +180,7 @@ export default function Setup({ onComplete }: SetupProps) {
       });
 
       if (!validateRes.ok) {
-        const err = await validateRes.json();
-        throw new Error(err.detail || "Template validation failed");
+        throw new Error(await readErrorDetailFromResponse(validateRes));
       }
 
       const validateData = await validateRes.json();
@@ -239,8 +217,7 @@ export default function Setup({ onComplete }: SetupProps) {
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Validation failed");
+        throw new Error(await readErrorDetailFromResponse(res));
       }
 
       const data = await res.json();
@@ -341,20 +318,6 @@ export default function Setup({ onComplete }: SetupProps) {
 
   // ── Section reorder helpers ────────────────────────────────────────────────
 
-  function reorderSections(from: number, to: number) {
-    if (from === to) return;
-    const n = editSections.length;
-    if (from < 0 || to < 0 || from >= n || to >= n) return;
-    const next = [...editSections];
-    const [item] = next.splice(from, 1);
-    next.splice(to, 0, item);
-    setEditSections(next);
-  }
-
-  function removeSection(idx: number) {
-    setEditSections((s) => s.filter((_, i) => i !== idx));
-  }
-
   function addSection(name: string) {
     if (!editSections.includes(name)) {
       setEditSections((s) => [...s, name]);
@@ -398,10 +361,7 @@ export default function Setup({ onComplete }: SetupProps) {
           : 4;
 
   return (
-    <div
-      className="app-canvas flex min-h-screen items-center justify-center p-6 text-gray-900"
-      onClick={() => previewModal && setPreviewModal(null)}
-    >
+    <div className="app-canvas flex min-h-screen items-center justify-center p-6 text-gray-900">
       <div
         className={
           phase === "theme"
@@ -657,10 +617,10 @@ export default function Setup({ onComplete }: SetupProps) {
                         className="group relative overflow-hidden rounded-xl border border-gray-200/80 bg-white/70 shadow-sm backdrop-blur-sm dark:border-white/10 dark:bg-white/[0.06]"
                         style={{ aspectRatio: "8.5/11" }}
                       >
-                        <object
-                          data={`http://localhost:8000/template-preview-pdf/${editTemplate || suggestion.template}#toolbar=0&navpanes=0&scrollbar=0`}
-                          type="application/pdf"
-                          className="block h-full w-full bg-white"
+                        <iframe
+                          title="Selected template preview"
+                          src={`${SIDECAR}/template-preview-pdf/${editTemplate || suggestion.template}?v=${TEMPLATE_PREVIEW_V}#toolbar=0&navpanes=0&scrollbar=0`}
+                          className="block h-full w-full border-0 bg-white"
                           style={{ width: "100%", height: "100%", pointerEvents: "none" }}
                         />
                         <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between gap-2 border-t border-black/10 bg-white/88 px-3 py-2 text-xs backdrop-blur-md dark:border-white/15 dark:bg-black/55">
@@ -684,94 +644,16 @@ export default function Setup({ onComplete }: SetupProps) {
                     <div>
                       <div className="mb-2">
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Section Order</label>
-                        <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">Drag the handle to reorder.</p>
+                        <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
+                          Use the up and down buttons to reorder (works reliably in the desktop app).
+                        </p>
                       </div>
-                      <div className="space-y-1.5">
-                        {editSections.map((s, i) => (
-                          <div
-                            key={s}
-                            data-section-row
-                            className={`flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 transition-[opacity,box-shadow,background-color,border-color] duration-200 ease-out dark:border-gray-600 dark:bg-gray-700 ${
-                              sectionDragOverIndex === i && sectionDragIndex !== i
-                                ? "border-brand-400/70 bg-brand-50/50 ring-1 ring-brand-400/40 dark:bg-brand-950/20"
-                                : ""
-                            } ${sectionDragIndex === i ? "opacity-45" : ""}`}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              e.dataTransfer.dropEffect = "move";
-                              if (sectionDragIndex !== null && sectionDragIndex !== i) {
-                                setSectionDragOverIndex(i);
-                              }
-                            }}
-                            onDragLeave={(e) => {
-                              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                                setSectionDragOverIndex((prev) => (prev === i ? null : prev));
-                              }
-                            }}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              const raw =
-                                e.dataTransfer.getData("application/x-section-index") ||
-                                e.dataTransfer.getData("text/plain");
-                              const from = parseInt(raw, 10);
-                              if (!Number.isNaN(from)) reorderSections(from, i);
-                              setSectionDragIndex(null);
-                              setSectionDragOverIndex(null);
-                            }}
-                          >
-                            <div
-                              draggable
-                              role="button"
-                              tabIndex={0}
-                              aria-label={`Reorder ${SECTION_LABELS[s] || s}`}
-                              title="Drag to reorder"
-                              className="-ml-0.5 flex shrink-0 cursor-grab touch-none rounded p-0.5 text-gray-400 hover:text-gray-600 active:cursor-grabbing dark:text-gray-500 dark:hover:text-gray-300"
-                              onDragStart={(e) => {
-                                const row = (e.currentTarget as HTMLElement).closest("[data-section-row]");
-                                if (row) {
-                                  sectionDragGhostRef.current?.remove();
-                                  sectionDragGhostRef.current = mountSectionDragGhost(
-                                    row as HTMLElement,
-                                    e.clientX,
-                                    e.clientY,
-                                    e.dataTransfer,
-                                  );
-                                }
-                                const id = String(i);
-                                e.dataTransfer.setData("application/x-section-index", id);
-                                e.dataTransfer.setData("text/plain", id);
-                                e.dataTransfer.effectAllowed = "move";
-                                setSectionDragIndex(i);
-                              }}
-                              onDragEnd={() => {
-                                sectionDragGhostRef.current?.remove();
-                                sectionDragGhostRef.current = null;
-                                setSectionDragIndex(null);
-                                setSectionDragOverIndex(null);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "ArrowUp" && i > 0) {
-                                  e.preventDefault();
-                                  reorderSections(i, i - 1);
-                                } else if (e.key === "ArrowDown" && i < editSections.length - 1) {
-                                  e.preventDefault();
-                                  reorderSections(i, i + 1);
-                                }
-                              }}
-                            >
-                              <GripVertical className="h-4 w-4" strokeWidth={2} aria-hidden />
-                            </div>
-                            <span className="flex-1 text-sm text-gray-700 dark:text-gray-300">{SECTION_LABELS[s] || s}</span>
-                            <button
-                              type="button"
-                              onClick={() => removeSection(i)}
-                              className="text-sm text-gray-300 transition-colors hover:text-red-500 dark:text-gray-600"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ))}
-                      </div>
+                      <SectionOrderEditor
+                        orderedKeys={editSections}
+                        onReorder={setEditSections}
+                        onRemove={(key) => setEditSections((rows) => rows.filter((k) => k !== key))}
+                        canRemove={() => true}
+                      />
 
                       {/* Add section */}
                       {ALL_SECTIONS.filter((s) => !editSections.includes(s)).length > 0 && (
@@ -891,6 +773,7 @@ export default function Setup({ onComplete }: SetupProps) {
         onOpenChange={(open) => !open && setPreviewModal(null)}
         title={previewModal ? `${TEMPLATE_LABELS[previewModal]}: sample preview` : "Preview"}
         className="w-[min(760px,96vw)]"
+        bodyClassName="min-h-0 overflow-y-auto"
         footer={
           <p className="text-center text-xs text-gray-500 dark:text-gray-400">
             Generated with sample data. Your resume will use your actual content
@@ -898,12 +781,12 @@ export default function Setup({ onComplete }: SetupProps) {
         }
       >
         {previewModal ? (
-          <div className="h-[min(78vh,760px)] min-h-[420px] w-full bg-neutral-200 dark:bg-neutral-700">
-            <object
+          <div className="h-[min(78vh,760px)] min-h-[420px] w-full overflow-y-auto bg-neutral-200 dark:bg-neutral-700">
+            <iframe
               key={previewModal}
-              data={`http://localhost:8000/template-preview-pdf/${previewModal}#toolbar=1&navpanes=0`}
-              type="application/pdf"
-              className="h-full w-full"
+              title={`${TEMPLATE_LABELS[previewModal]} sample preview`}
+              src={`${SIDECAR}/template-preview-pdf/${previewModal}?v=${TEMPLATE_PREVIEW_V}#toolbar=1&navpanes=0&scrollbar=1`}
+              className="h-full min-h-[min(78vh,760px)] w-full border-0 bg-white"
               style={{ display: "block" }}
             />
           </div>
@@ -947,10 +830,10 @@ export default function Setup({ onComplete }: SetupProps) {
                     </div>
                   ) : null}
                   <div className="relative overflow-hidden bg-white" style={{ aspectRatio: "8.5/11" }}>
-                    <object
-                      data={`http://localhost:8000/template-preview-pdf/${id}#toolbar=0&navpanes=0&scrollbar=0`}
-                      type="application/pdf"
-                      className="block h-full w-full bg-white"
+                    <iframe
+                      title={`${name} template`}
+                      src={`${SIDECAR}/template-preview-pdf/${id}?v=${TEMPLATE_PREVIEW_V}#toolbar=0&navpanes=0&scrollbar=0`}
+                      className="block h-full w-full border-0 bg-white"
                       style={{ width: "100%", height: "100%", pointerEvents: "none" }}
                     />
                   </div>

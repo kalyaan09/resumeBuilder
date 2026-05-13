@@ -4,7 +4,8 @@ import Setup from "./pages/Setup";
 import Editor from "./pages/Editor";
 import Settings from "./pages/Settings";
 import SettingsProfileEdit from "./pages/SettingsProfileEdit";
-import { readConfig } from "./lib/persistenceStore";
+import History from "./pages/History";
+import { readConfig, writeConfig } from "./lib/persistenceStore";
 import { applyTheme, Theme } from "./lib/themeStore";
 import { ConnectionContext } from "./context/ConnectionContext";
 import { ProfilesContext } from "./context/ProfilesContext";
@@ -19,25 +20,33 @@ function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
 
-  useEffect(() => {
-    readConfig()
-      .then((config) => {
-        setSetupComplete(!!config?.setupComplete);
-        applyTheme((config?.theme as Theme) || "system");
-      })
-      .catch(() => {
-        setSetupComplete(false);
-        applyTheme("system");
-      });
-
-    checkBackendHealth();
-  }, []);
-
   const refreshProfiles = useCallback(async () => {
     try {
       const data = await getProfiles();
-      setProfiles(Array.isArray(data.profiles) ? data.profiles : []);
-      setActiveProfileId(typeof data.activeProfile === "string" ? data.activeProfile : null);
+      const nextProfiles = Array.isArray(data.profiles) ? data.profiles : [];
+      const nextActive = typeof data.activeProfile === "string" ? data.activeProfile : null;
+      setProfiles(nextProfiles);
+      setActiveProfileId(nextActive);
+
+      // If profiles exist, ensure setupComplete + a valid activeProfile are persisted.
+      // config.json can list an activeProfile id that no longer exists on disk; Python /profiles
+      // falls back to a real id — we must sync that to Tauri config or the Editor only reads stale config.
+      if (nextProfiles.length > 0 && nextActive) {
+        setSetupComplete(true);
+        void (async () => {
+          const c = await readConfig().catch(() => null);
+          const ids = new Set(nextProfiles.map((p) => p.id));
+          const cur = typeof c?.activeProfile === "string" ? c.activeProfile : "";
+          const needsFix = !c?.setupComplete || !cur || !ids.has(cur);
+          if (needsFix) {
+            await writeConfig({
+              ...(c || {}),
+              setupComplete: true,
+              activeProfile: nextActive,
+            }).catch(() => {});
+          }
+        })();
+      }
     } catch {
       // If backend doesn't support profiles yet, silently fall back.
       setProfiles([]);
@@ -53,8 +62,10 @@ function App() {
         if (res.ok) {
           setBackendReady(true);
           setBackendError(null);
+          // MUST await: otherwise we set backendConnecting=false while profiles are still []
+          // and the router sends the user to /setup before GET /profiles returns.
+          await refreshProfiles();
           setBackendConnecting(false);
-          refreshProfiles();
           return;
         }
       } catch {
@@ -69,7 +80,24 @@ function App() {
     setBackendError(
       "We could not reach the local service that prepares your PDF preview. Make sure the app helper is running."
     );
-  }, []);
+  }, [refreshProfiles]);
+
+  useEffect(() => {
+    readConfig()
+      .then((config) => {
+        // Existing installs often have activeProfile + data on disk but no setupComplete flag.
+        const ap = config?.activeProfile;
+        const hasActive = typeof ap === "string" && ap.length > 0;
+        setSetupComplete(!!config?.setupComplete || hasActive);
+        applyTheme((config?.theme as Theme) || "system");
+      })
+      .catch(() => {
+        setSetupComplete(false);
+        applyTheme("system");
+      });
+
+    void checkBackendHealth();
+  }, [checkBackendHealth]);
 
   const connection = useMemo(
     () => ({
@@ -96,7 +124,9 @@ function App() {
     };
   }, [profiles, activeProfileId, refreshProfiles]);
 
-  if (setupComplete === null) {
+  // Stay on spinner while config is loading (null), OR while config says incomplete but the
+  // backend is still connecting (including the first GET /profiles after /health).
+  if (setupComplete === null || backendConnecting) {
     return (
       <div className="app-canvas flex min-h-screen items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
@@ -115,6 +145,7 @@ function App() {
             />
             <Route path="/setup" element={<Setup onComplete={() => setSetupComplete(true)} />} />
             <Route path="/editor" element={<Editor />} />
+            <Route path="/history" element={<History />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/settings/profile/:profileId/edit" element={<SettingsProfileEdit />} />
           </Routes>

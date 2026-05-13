@@ -1,3 +1,5 @@
+import { parseErrorDetailBody } from "./httpError";
+
 const SIDECAR = "http://localhost:8000";
 
 export type Profile = {
@@ -8,6 +10,24 @@ export type Profile = {
 export type ProfilesResponse = {
   profiles: Profile[];
   activeProfile: string | null;
+};
+
+export type ExportHistoryEntry = {
+  date: string;
+  company: string;
+  role: string;
+  profile_used: string;
+  match_score: number;
+  jd_snippet: string;
+  jd_keywords: string[];
+  seniority: string;
+  company_type: string;
+  font_size: number;
+  pages: number;
+};
+
+export type ExportHistoryResponse = {
+  applications: ExportHistoryEntry[];
 };
 
 export type TransformersContext = {
@@ -21,25 +41,24 @@ export type TransformersContext = {
 
 async function jsonOrThrow(res: Response) {
   const text = await res.text();
-  let data: any = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = text;
-  }
   if (!res.ok) {
-    const msg =
-      typeof data === "string"
-        ? data
-        : data?.detail || data?.error || data?.message || res.statusText;
-    throw new Error(String(msg || "Request failed"));
+    throw new Error(parseErrorDetailBody(text, res));
   }
-  return data;
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return text;
+  }
 }
 
 export async function getProfiles(): Promise<ProfilesResponse> {
   const res = await fetch(`${SIDECAR}/profiles`);
   return (await jsonOrThrow(res)) as ProfilesResponse;
+}
+
+export async function getExportHistory(): Promise<ExportHistoryResponse> {
+  const res = await fetch(`${SIDECAR}/history`);
+  return (await jsonOrThrow(res)) as ExportHistoryResponse;
 }
 
 export async function createProfile(input: {

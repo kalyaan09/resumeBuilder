@@ -15,10 +15,12 @@ import { formatAiError } from "../ui/errorFormat";
 import { useProfiles } from "../context/ProfilesContext";
 import { createProfile, deleteProfile as deleteProfileApi, getProfileResume, getShared, putProfileResume, putShared, resetAll } from "../lib/sidecarApi";
 import { CORE_SECTION_KEYS, SECTION_LABELS, computeSectionsWithData, getDefaultSectionOrderFromConfig, mergeVisibleReorderWithHidden } from "../lib/sectionOrder";
+import { readErrorDetailFromResponse } from "../lib/httpError";
+import { autoFitOnExportEnabled } from "../lib/exportPrefs";
 
 const SIDECAR = "http://localhost:8000";
 /** Bump when python/main.py PREVIEW_VERSION changes (busts WebView cache for embedded PDFs). */
-const PREVIEW_ASSET_VERSION = 7;
+const PREVIEW_ASSET_VERSION = 8;
 
 const TEMPLATE_LABELS: Record<string, string> = {
   jake: "Jake's Resume",
@@ -91,16 +93,12 @@ function TemplateThumb({
       ) : null}
 
       <div className="relative overflow-hidden bg-white" style={{ aspectRatio: "8.5/11" }}>
-        <object
-          data={pdfSrc}
-          type="application/pdf"
-          className="block h-full w-full bg-white"
+        <iframe
+          title={`${name} template thumbnail`}
+          src={pdfSrc}
+          className="block h-full w-full border-0 bg-white"
           style={{ width: "100%", height: "100%", pointerEvents: "none" }}
-        >
-          <div className="flex h-full w-full items-center justify-center px-3 text-center text-xs text-gray-400">
-            PDF preview not available. Use “Full preview”.
-          </div>
-        </object>
+        />
 
         <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-all group-hover:bg-black/25">
           <Button
@@ -346,8 +344,7 @@ export default function Settings() {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(err.detail || "Re-ask failed");
+      throw new Error(await readErrorDetailFromResponse(res));
     }
     const data = await res.json();
     setEditedResume((prev) => (prev ? { ...prev, [key]: data.content } : prev));
@@ -380,8 +377,7 @@ export default function Settings() {
       });
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(err.detail || "Sync failed");
+        throw new Error(await readErrorDetailFromResponse(res));
       }
 
       const data = await res.json();
@@ -683,10 +679,29 @@ export default function Settings() {
                       <span className="shrink-0 text-[13px] font-medium tabular-nums text-gray-500 dark:text-gray-400">pt</span>
                     </div>
                   </div>
+                  <div className="rounded-xl border border-gray-200/80 bg-white/50 p-4 dark:border-white/10 dark:bg-white/[0.04]">
+                    <label className="flex cursor-pointer items-start gap-3">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-brand-600 focus:ring-brand-500 dark:border-gray-600 dark:bg-[#2C2C2E]"
+                        checked={autoFitOnExportEnabled(config)}
+                        onChange={(e) => updateConfig({ autoFitOnExport: e.target.checked })}
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium text-gray-900 dark:text-gray-100">Auto-fit font on Save</span>
+                        <TypographyMuted className="mt-1 block text-xs leading-relaxed">
+                          When enabled, Save may step down from your chosen size (10 → 9.5 → 9 pt) so the PDF fits on one page.
+                          Turn off to export at exactly the font size shown in the editor (your PDF may use more than one page).
+                          Choosing a font size manually in the editor always exports at that size.
+                        </TypographyMuted>
+                      </span>
+                    </label>
+                  </div>
                   <div>
                     <label className="mb-2 block text-xs font-medium text-gray-600 dark:text-gray-400">Default Section Order</label>
                     <TypographyMuted className="mb-2 block w-full max-w-none text-xs">
-                      Drag to set the global PDF section order. Profiles can override on each profile&apos;s edit page.
+                      Use the up and down buttons to set the global PDF section order. Profiles can override on each
+                      profile&apos;s edit page.
                     </TypographyMuted>
                     {config ? (
                       <>
@@ -1270,19 +1285,19 @@ export default function Settings() {
         surface={false}
         contentClassName="rounded-3xl border-white/55 bg-white/80 shadow-[0_22px_70px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.08] dark:shadow-[0_28px_90px_rgba(0,0,0,0.55)]"
         headerClassName="border-b border-white/25 bg-white/45 px-5 py-2 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.06]"
-        bodyClassName="bg-transparent"
+        bodyClassName="min-h-0 overflow-y-auto bg-transparent"
         footerClassName="border-t border-white/25 bg-white/45 px-5 py-3 backdrop-blur-md dark:border-white/10 dark:bg-white/[0.06]"
         footer={
           <p className="text-center text-[11px] text-gray-500 dark:text-gray-400">Sample preview · scroll to see the full page</p>
         }
       >
         {previewModal ? (
-          <div className="h-[min(78vh,760px)] min-h-[420px] w-full bg-neutral-200 dark:bg-neutral-700">
-            <object
+          <div className="h-[min(78vh,760px)] min-h-[420px] w-full overflow-y-auto bg-neutral-200 dark:bg-neutral-700">
+            <iframe
               key={previewModal}
-              data={`${SIDECAR}/template-preview-pdf/${previewModal}?v=${PREVIEW_ASSET_VERSION}#toolbar=1&navpanes=0`}
-              type="application/pdf"
-              className="h-full w-full"
+              title={`${TEMPLATE_LABELS[previewModal]} full preview`}
+              src={`${SIDECAR}/template-preview-pdf/${previewModal}?v=${PREVIEW_ASSET_VERSION}#toolbar=1&navpanes=0&scrollbar=1`}
+              className="h-full min-h-[min(78vh,760px)] w-full border-0 bg-white"
               style={{ display: "block" }}
             />
           </div>

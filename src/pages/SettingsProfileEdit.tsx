@@ -367,6 +367,9 @@ export default function SettingsProfileEdit() {
                   {useCustomSectionOrder ? (
                     <div className="mt-4 border-t border-gray-200/60 pt-4 dark:border-white/10">
                       <div className="mb-2 text-xs font-medium text-gray-600 dark:text-gray-400">Section order (this profile)</div>
+                      <TypographyMuted className="mb-2 block text-xs">
+                        Use the up and down buttons to reorder sections.
+                      </TypographyMuted>
                       <SectionOrderEditor
                         orderedKeys={sectionOrderLocal}
                         onReorder={(next) => {

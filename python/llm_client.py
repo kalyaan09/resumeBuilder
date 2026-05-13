@@ -1,5 +1,61 @@
+import hashlib
+import logging
+import re
 import time
 from typing import Optional
+
+log = logging.getLogger("resume")
+
+# Covers rate limits (long backoff) and transient network/SDK failures (short backoff).
+_GEMINI_MAX_ATTEMPTS = 10
+
+
+def _is_gemini_resource_exhausted(exc: BaseException) -> bool:
+    msg = str(exc)
+    return "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower()
+
+
+def _is_gemini_transient_error(exc: BaseException) -> bool:
+    """Fetch-layer and connection errors that often succeed on retry (incl. WebView/proxy flakiness)."""
+    msg = str(exc).lower()
+    needles = (
+        "load failed",
+        "fetch failed",
+        "connection reset",
+        "connection aborted",
+        "remote end closed",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "econnreset",
+        "econnrefused",
+        "broken pipe",
+        "503",
+        "502",
+    )
+    return any(n in msg for n in needles)
+
+
+def _is_gemini_retryable_server_error(exc: BaseException) -> bool:
+    """Google occasionally returns 500 INTERNAL on busy models (e.g. Gemma); retries often succeed."""
+    msg = str(exc)
+    return "500" in msg and ("INTERNAL" in msg or "internal error" in msg.lower())
+
+
+def _gemini_retry_sleep_seconds(exc: BaseException, attempt: int) -> float:
+    """Parse RetryInfo from Google error text, else exponential backoff (capped)."""
+    msg = str(exc)
+    m = re.search(r"retryDelay['\"]:\s*['\"](\d+(?:\.\d+)?)s['\"]", msg)
+    if m:
+        return min(float(m.group(1)) + 0.75, 120.0)
+    m2 = re.search(r"retry in ([\d.]+)s", msg, re.I)
+    if m2:
+        return min(float(m2.group(1)) + 0.75, 120.0)
+    return min(8.0 * (1.4**attempt), 90.0)
+
+
+def _prompt_fingerprint(static_prompt: str) -> str:
+    return hashlib.sha256(static_prompt.encode("utf-8")).hexdigest()
 
 
 class GeminiCacheManager:
@@ -7,25 +63,55 @@ class GeminiCacheManager:
         self._cache_name = None
         self._cache_created_at = None
         self._cache_ttl = 3600  # 1 hour
+        self._cache_model: Optional[str] = None
+        self._cache_prompt_fp: Optional[str] = None
 
     def get_or_create_cache(self, static_prompt: str, model: str, api_key: str) -> str:
-        if (self._cache_name and self._cache_created_at and
-                time.time() - self._cache_created_at < self._cache_ttl - 60):
+        fp = _prompt_fingerprint(static_prompt)
+        if (
+            self._cache_name
+            and self._cache_created_at
+            and self._cache_model == model
+            and self._cache_prompt_fp == fp
+            and time.time() - self._cache_created_at < self._cache_ttl - 60
+        ):
             return self._cache_name
+
         import google.generativeai as genai
+
         genai.configure(api_key=api_key)
         cache = genai.caching.CachedContent.create(
             model=model,
             system_instruction=static_prompt,
-            ttl=f"{self._cache_ttl}s"
+            ttl=f"{self._cache_ttl}s",
         )
         self._cache_name = cache.name
         self._cache_created_at = time.time()
+        self._cache_model = model
+        self._cache_prompt_fp = fp
         return self._cache_name
 
 
 # Module-level singleton — shared across all requests (required for Gemini cache reuse)
 _gemini_cache_manager = GeminiCacheManager()
+
+
+def _genai_response_text(response) -> str:
+    """Best-effort text extraction (blocked / empty .text on some models)."""
+    t = getattr(response, "text", None)
+    if t:
+        return t
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return ""
+    chunks = []
+    for cand in candidates:
+        parts = getattr(getattr(cand, "content", None), "parts", None) or []
+        for p in parts:
+            txt = getattr(p, "text", None)
+            if txt:
+                chunks.append(txt)
+    return "".join(chunks)
 
 
 class LLMClient:
@@ -97,30 +183,186 @@ class LLMClient:
         )
         return response.choices[0].message.content or ""
 
-    def _complete_gemini(self, static_prompt: str, dynamic_prompt: str, max_tokens: int) -> str:
-        try:
-            cache_name = self.cache_manager.get_or_create_cache(
-                static_prompt, self.model, self.api_key
-            )
-            import google.generativeai as genai
-            model = genai.GenerativeModel.from_cached_content(cached_content=cache_name)
-            response = model.generate_content(dynamic_prompt)
-            return response.text
-        except Exception:
-            # Fall back to uncached if caching fails (e.g. prompt too short for caching)
-            from google import genai as new_genai
-            from google.genai import types
+    def _gemini_model_id(self) -> str:
+        """Pass through user config; Google accepts ids like gemini-2.5-flash or models/gemini-2.5-flash."""
+        return (self.model or "").strip()
 
-            client = new_genai.Client(api_key=self.api_key)
+    def _gemini_skip_cached_content(self) -> bool:
+        """
+        Gemma and several open-weight endpoints often fail or error on CachedContent + from_cached_content
+        (Load failed / 400). Use the unified generate_content path instead.
+        """
+        m = (self.model or "").lower()
+        if "gemma" in m:
+            return True
+        return False
+
+    def _gemini_merge_prompt_for_open_models(self) -> bool:
+        """Some Gemma releases regress on very large system_instruction; merge into one user turn."""
+        return "gemma" in (self.model or "").lower()
+
+    def _gemini_merged_user_turn(self, static_prompt: str, dynamic_prompt: str) -> str:
+        return (
+            "SYSTEM INSTRUCTIONS (follow these exactly):\n\n"
+            f"{static_prompt}\n\n"
+            "---\n\n"
+            "USER REQUEST:\n\n"
+            f"{dynamic_prompt}"
+        )
+
+    def _gemini_retry_loop(self, attempt_once):
+        """Shared backoff for quota, network blips, and transient 500s from Google."""
+        last_err: Optional[BaseException] = None
+        for attempt in range(_GEMINI_MAX_ATTEMPTS):
+            try:
+                return attempt_once()
+            except Exception as e:
+                last_err = e
+                if attempt >= _GEMINI_MAX_ATTEMPTS - 1:
+                    raise
+                if _is_gemini_resource_exhausted(e):
+                    sleep_s = _gemini_retry_sleep_seconds(e, attempt)
+                    log.warning(
+                        "[gemini] rate limited (attempt %d/%d), retry in %.1fs",
+                        attempt + 1,
+                        _GEMINI_MAX_ATTEMPTS,
+                        sleep_s,
+                    )
+                    time.sleep(sleep_s)
+                    continue
+                if _is_gemini_transient_error(e):
+                    sleep_s = min(2.0 * (1.5**attempt), 30.0)
+                    log.warning(
+                        "[gemini] transient error (attempt %d/%d): %s — retry in %.1fs",
+                        attempt + 1,
+                        _GEMINI_MAX_ATTEMPTS,
+                        e,
+                        sleep_s,
+                    )
+                    time.sleep(sleep_s)
+                    continue
+                if _is_gemini_retryable_server_error(e):
+                    sleep_s = min(1.5 + 2.5 * attempt, 45.0)
+                    log.warning(
+                        "[gemini] server error (attempt %d/%d): %s — retry in %.1fs",
+                        attempt + 1,
+                        _GEMINI_MAX_ATTEMPTS,
+                        e,
+                        sleep_s,
+                    )
+                    time.sleep(sleep_s)
+                    continue
+                raise
+        assert last_err is not None
+        raise last_err
+
+    def _complete_gemini_direct_new_sdk_gemma(self, static_prompt: str, dynamic_prompt: str, max_tokens: int) -> str:
+        """Gemma via `google.genai` when the legacy `google-generativeai` package is not installed."""
+        from google import genai as new_genai
+        from google.genai import types
+
+        client = new_genai.Client(api_key=self.api_key)
+        model_id = self._gemini_model_id()
+        merged = self._gemini_merged_user_turn(static_prompt, dynamic_prompt)
+        cfg_kw: dict = {"max_output_tokens": max_tokens}
+        afc_cls = getattr(types, "AutomaticFunctionCallingConfig", None)
+        if afc_cls is not None:
+            cfg_kw["automatic_function_calling"] = afc_cls(disable=True, maximum_remote_calls=None)
+
+        def attempt_once():
             response = client.models.generate_content(
-                model=self.model,
+                model=model_id,
+                contents=merged,
+                config=types.GenerateContentConfig(**cfg_kw),
+            )
+            text = _genai_response_text(response)
+            if not (text and text.strip()):
+                raise RuntimeError("Empty or blocked response from Gemma (no text in candidates).")
+            return text
+
+        return self._gemini_retry_loop(attempt_once)
+
+    def _complete_gemini_direct_legacy_gemma(self, static_prompt: str, dynamic_prompt: str, max_tokens: int) -> str:
+        """
+        AI Studio's Python samples use google.generativeai.GenerativeModel; the newer `google.genai`
+        client often triggers 500 INTERNAL on Gemma with the same key/model even when Studio works.
+        """
+        try:
+            import google.generativeai as genai
+        except ImportError:
+            log.warning(
+                "[gemini] google-generativeai not installed; using google.genai for Gemma. "
+                "Install with: pip install google-generativeai (matches AI Studio snippets)."
+            )
+            return self._complete_gemini_direct_new_sdk_gemma(static_prompt, dynamic_prompt, max_tokens)
+
+        log.info("[gemini] Gemma: google.generativeai path (aligned with AI Studio Python snippets)")
+        genai.configure(api_key=self.api_key)
+        model_id = self._gemini_model_id()
+        merged = self._gemini_merged_user_turn(static_prompt, dynamic_prompt)
+        model = genai.GenerativeModel(model_id)
+
+        def attempt_once():
+            response = model.generate_content(
+                merged,
+                generation_config=genai.GenerationConfig(max_output_tokens=max_tokens),
+            )
+            text = _genai_response_text(response)
+            if not (text and text.strip()):
+                raise RuntimeError("Empty or blocked response from Gemma (no text in candidates).")
+            return text
+
+        return self._gemini_retry_loop(attempt_once)
+
+    def _complete_gemini_direct_new_sdk(self, static_prompt: str, dynamic_prompt: str, max_tokens: int) -> str:
+        """Gemini models via google-genai (prefix cache friendly, AFC-capable)."""
+        from google import genai as new_genai
+        from google.genai import types
+
+        client = new_genai.Client(api_key=self.api_key)
+        model_id = self._gemini_model_id()
+
+        def attempt_once():
+            response = client.models.generate_content(
+                model=model_id,
                 contents=dynamic_prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=static_prompt,
                     max_output_tokens=max_tokens,
                 ),
             )
-            return response.text
+            text = _genai_response_text(response)
+            if not (text and text.strip()):
+                raise RuntimeError("Empty or blocked response from Gemini (no text in candidates).")
+            return text
+
+        return self._gemini_retry_loop(attempt_once)
+
+    def _complete_gemini_direct(self, static_prompt: str, dynamic_prompt: str, max_tokens: int) -> str:
+        if self._gemini_merge_prompt_for_open_models():
+            return self._complete_gemini_direct_legacy_gemma(static_prompt, dynamic_prompt, max_tokens)
+        return self._complete_gemini_direct_new_sdk(static_prompt, dynamic_prompt, max_tokens)
+
+    def _complete_gemini(self, static_prompt: str, dynamic_prompt: str, max_tokens: int) -> str:
+        if self._gemini_skip_cached_content():
+            return self._complete_gemini_direct(static_prompt, dynamic_prompt, max_tokens)
+
+        try:
+            cache_name = self.cache_manager.get_or_create_cache(static_prompt, self.model, self.api_key)
+            import google.generativeai as genai
+
+            model = genai.GenerativeModel.from_cached_content(cached_content=cache_name)
+            response = model.generate_content(
+                dynamic_prompt,
+                generation_config=genai.GenerationConfig(max_output_tokens=max_tokens),
+            )
+            text = getattr(response, "text", None) or ""
+            if text.strip():
+                return text
+            raise RuntimeError("Empty text from cached Gemini model")
+        except Exception as e:
+            log.warning("[gemini] cached path failed (%s), using direct generate_content", e)
+            return self._complete_gemini_direct(static_prompt, dynamic_prompt, max_tokens)
 
     def _complete_ollama(self, static_prompt: str, dynamic_prompt: str, max_tokens: int) -> str:
         import requests

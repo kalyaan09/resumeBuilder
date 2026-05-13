@@ -88,13 +88,17 @@ export async function writeConfig(data: Record<string, unknown>): Promise<void> 
 }
 
 export async function readConfig(): Promise<Record<string, unknown> | null> {
-  const text = (await tauriRead(CONFIG_PATH)) ?? localStorage.getItem(LS_CONFIG);
-  if (!text) return null;
-  try {
-    return JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  const diskText = await tauriRead(CONFIG_PATH);
+  const lsText = localStorage.getItem(LS_CONFIG);
+  let disk: Record<string, unknown> | null = null;
+  let ls: Record<string, unknown> | null = null;
+  try { if (diskText) disk = JSON.parse(diskText) as Record<string, unknown>; } catch { /* ignore */ }
+  try { if (lsText) ls = JSON.parse(lsText) as Record<string, unknown>; } catch { /* ignore */ }
+  if (!disk && !ls) return null;
+  if (!disk) return ls;
+  if (!ls) return disk;
+  // Disk wins for keys present in both; localStorage fills keys missing from disk (e.g. modelConfig).
+  return { ...ls, ...disk };
 }
 
 // ── Shared data (basics + education) ─────────────────────────────────────────

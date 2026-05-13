@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ChevronsLeft, ChevronsRight, Cpu, FileText, UserRound } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Cpu, FileText, History as HistoryNavIcon, UserRound } from "lucide-react";
 import { useConnection } from "../context/ConnectionContext";
 import { useProfiles } from "../context/ProfilesContext";
 import { Button } from "../ui";
@@ -73,7 +73,7 @@ export default function AppSidebar({
   active,
   config,
 }: {
-  active: "editor" | "settings";
+  active: "editor" | "settings" | "history";
   config: Record<string, unknown> | null;
 }) {
   const navigate = useNavigate();
@@ -176,6 +176,18 @@ export default function AppSidebar({
               <Button
                 type="button"
                 variant="ghost"
+                onClick={() => navigate("/history")}
+                className={navBtnCollapsed(active === "history")}
+                aria-label="History"
+                title="History"
+              >
+                <HistoryNavIcon className="h-5 w-5 shrink-0 opacity-90" />
+              </Button>
+            </motion.div>
+            <motion.div whileTap={{ scale: 0.99 }} className="w-full">
+              <Button
+                type="button"
+                variant="ghost"
                 onClick={() => navigate("/settings")}
                 className={navBtnCollapsed(active === "settings")}
                 aria-label="Settings"
@@ -247,6 +259,17 @@ export default function AppSidebar({
               >
                 <DocumentIcon className="h-5 w-5 shrink-0 opacity-70" />
                 Editor
+              </Button>
+            </motion.div>
+            <motion.div whileTap={{ scale: 0.99 }} className="w-full">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => navigate("/history")}
+                className={navBtn(active === "history")}
+              >
+                <HistoryNavIcon className="h-5 w-5 shrink-0 opacity-70" />
+                History
               </Button>
             </motion.div>
             <motion.div whileTap={{ scale: 0.99 }} className="w-full">

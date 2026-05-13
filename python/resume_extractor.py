@@ -231,14 +231,58 @@ def _extract_docx(file_bytes: bytes) -> str:
 
 def _extract_pdf(file_bytes: bytes) -> str:
     """Extract text from all pages of a PDF."""
+    import zlib
     from pypdf import PdfReader
-    reader = PdfReader(io.BytesIO(file_bytes))
-    pages = []
-    for page in reader.pages:
-        t = page.extract_text()
-        if t and t.strip():
-            pages.append(t.strip())
-    return "\n\n".join(pages)
+    try:
+        # Many real-world PDFs contain streams that can trigger zlib errors in strict mode.
+        # strict=False makes parsing more tolerant in packaged builds.
+        reader = PdfReader(io.BytesIO(file_bytes), strict=False)
+    except Exception as e:
+        raise ValueError(
+            "We could not read this PDF. Please re-export it as a standard, text-based PDF (not a scanned image), then try again."
+        ) from e
+
+    pages: list[str] = []
+    try:
+        total = len(reader.pages)
+    except Exception:
+        total = 0
+
+    if total > 0:
+        for i in range(total):
+            try:
+                page = reader.pages[i]
+                t = page.extract_text()
+            except zlib.error:
+                # zlib "incorrect header check" and similar: skip the page.
+                continue
+            except Exception:
+                continue
+            if t and t.strip():
+                pages.append(t.strip())
+    else:
+        # Fallback iteration if len/pages indexing is not reliable for the PDF.
+        try:
+            for page in reader.pages:
+                try:
+                    t = page.extract_text()
+                except zlib.error:
+                    continue
+                except Exception:
+                    continue
+                if t and t.strip():
+                    pages.append(t.strip())
+        except zlib.error as e:
+            raise ValueError(
+                "We could not read this PDF. Please re-export it as a standard, text-based PDF (not a scanned image), then try again."
+            ) from e
+
+    text = "\n\n".join(pages).strip()
+    if not text:
+        raise ValueError(
+            "We could not extract text from this PDF. If it is a scanned PDF, please upload a text-based PDF or a DOCX file."
+        )
+    return text
 
 
 # ── LLM call + JSON parsing ───────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Eraser, Save, Sparkles } from "lucide-react";
@@ -6,14 +6,29 @@ import ResumeEditor from "../components/ResumeEditor";
 import AppSidebar from "../components/AppSidebar";
 import { getApiKey } from "../lib/secureStore";
 import { readConfig, readShared, readProfileResume, writeConfig } from "../lib/persistenceStore";
-import { getEffectiveSectionOrder } from "../lib/sectionOrder";
+import { getEffectiveActiveSections, getEffectiveSectionOrder } from "../lib/sectionOrder";
 import { Button, Modal, SegmentedControl, Surface, TypographyH2, TypographyMuted } from "../ui";
+import { formatAiError } from "../ui/errorFormat";
+import { cn } from "../ui/cn";
 import { useProfiles } from "../context/ProfilesContext";
-import type { TransformersContext } from "../lib/sidecarApi";
+import { getProfiles, type TransformersContext } from "../lib/sidecarApi";
 import { detectBestProfile, detectCompanyType, detectSeniority, extractKeywords, weakBulletIndicesFromResume } from "../lib/jdAnalysis";
+import { readErrorDetailFromResponse } from "../lib/httpError";
+import { autoFitOnExportEnabled } from "../lib/exportPrefs";
+import { buildEditorSession, readEditorSession, writeEditorSession } from "../lib/editorSessionStorage";
 
 const SIDECAR = "http://localhost:8000";
 const FONT_SIZES = [9, 9.5, 10, 10.5, 11];
+
+/**
+ * Embedded PDF: Fit = scale page to the iframe viewport (less letterboxing than FitH in a tall panel).
+ * FitH + a tall iframe is what caused large gray bands above/below the white page.
+ */
+const PREVIEW_PDF_HASH = "toolbar=0&navpanes=0&scrollbar=1&view=Fit&page=1";
+const PREVIEW_WIDTH_STORAGE_KEY = "editor.previewWidthPx.v1";
+const PREVIEW_MIN_W = 360;
+const PREVIEW_MAX_W = 580;
+const EDITOR_MIN_W = 520;
 
 function filterSections(
   resume: Record<string, unknown>,
@@ -32,6 +47,21 @@ function filterSections(
 export default function Editor() {
   const navigate = useNavigate();
   const { profiles, activeProfileId, activeProfileName, switchTo } = useProfiles();
+  /** Keeps latest editor fields for session persist (incl. on unmount / profile switch). */
+  const persistRef = useRef({
+    jdText: "",
+    editedResume: null as Record<string, unknown> | null,
+    transformersContext: {} as TransformersContext,
+    gaps: null as {
+      missing_skills?: string[];
+      removed_unsupported_skills?: string[];
+      added_supported_skills?: string[];
+    } | null,
+    fontSize: 10,
+    fontSizeManual: false,
+    lastExportPath: null as string | null,
+    activeProfileId: null as string | null,
+  });
 
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [sharedData, setSharedData] = useState<Record<string, unknown> | null>(null);
@@ -46,6 +76,11 @@ export default function Editor() {
   const [jdAiLoading, setJdAiLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gaps, setGaps] = useState<{
+    missing_skills?: string[];
+    removed_unsupported_skills?: string[];
+    added_supported_skills?: string[];
+  } | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
   const [lastExportPath, setLastExportPath] = useState<string | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
@@ -54,27 +89,272 @@ export default function Editor() {
   const [defaultFontSize, setDefaultFontSize] = useState<number>(10);
   const [fontSizeManual, setFontSizeManual] = useState(false);
   const [fontSizeDialog, setFontSizeDialog] = useState(false);
-  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  /** Two iframes: load the next PDF in the hidden one, swap on load (reduces WKWebView flicker). */
+  const [previewFrameUrls, setPreviewFrameUrls] = useState<[string | null, string | null]>([null, null]);
+  const [visiblePreviewFrame, setVisiblePreviewFrame] = useState<0 | 1>(0);
+  const previewCommitRef = useRef(0);
+  const pendingCommitByFrameRef = useRef<[number, number]>([-1, -1]);
+  const visiblePreviewFrameRef = useRef<0 | 1>(0);
+
   const [previewLoading, setPreviewLoading] = useState(false);
   const [overflowWarning, setOverflowWarning] = useState<string | null>(null);
+  /** Brief animation + message when Save used auto-fit to shrink font (setting on + not manual). */
+  const [autoFitFontPulse, setAutoFitFontPulse] = useState(false);
+  const [autoFitNotice, setAutoFitNotice] = useState<string | null>(null);
+  const previewMeasureRef = useRef<HTMLDivElement>(null);
+  const [previewWidthPx, setPreviewWidthPx] = useState<number | null>(null);
+  const previewWidthPxRef = useRef<number | null>(null);
+  const isResizingRef = useRef(false);
+  const editorLayoutRef = useRef<HTMLDivElement>(null);
+
+  persistRef.current = {
+    jdText,
+    editedResume,
+    transformersContext,
+    gaps,
+    fontSize,
+    fontSizeManual,
+    lastExportPath,
+    activeProfileId,
+  };
+
+  // Stable refs so auto-detect can read current values without being in its dep array.
+  const activeProfileIdRef = useRef<string | null>(activeProfileId);
+  useEffect(() => { activeProfileIdRef.current = activeProfileId; }, [activeProfileId]);
+  const profileResumeRef = useRef(profileResume);
+  useEffect(() => { profileResumeRef.current = profileResume; }, [profileResume]);
+  const switchToRef = useRef(switchTo);
+  useEffect(() => { switchToRef.current = switchTo; }, [switchTo]);
+  // userOverrideRef: set true when user manually picks a profile; cleared when JD changes substantially.
+  const userOverrideRef = useRef(false);
+  const overrideJdSnapshotRef = useRef("");
+  const sessionRestoredRef = useRef(false);
+  const sessionReadyForPersistRef = useRef(false);
+
+  function flushEditorSessionToStorage() {
+    const p = persistRef.current;
+    writeEditorSession(
+      buildEditorSession({
+        profileId: p.activeProfileId ?? null,
+        jdText: p.jdText,
+        editedResume: p.editedResume,
+        transformersContext: p.transformersContext,
+        gaps: p.gaps,
+        fontSize: p.fontSize,
+        fontSizeManual: p.fontSizeManual,
+        lastExportPath: p.lastExportPath,
+      }),
+    );
+  }
+
+  /** Restore JD + tailored resume when returning from History/Settings (same browser session). */
+  useLayoutEffect(() => {
+    if (dataLoading) return;
+    if (profiles.length > 0 && activeProfileId == null) return;
+    if (sessionRestoredRef.current) return;
+    sessionRestoredRef.current = true;
+
+    const pid = activeProfileId ?? null;
+    const s = readEditorSession();
+    if (!s) {
+      sessionReadyForPersistRef.current = true;
+      return;
+    }
+
+    if (s.jdText) setJdText(s.jdText);
+
+    if (s.profileId != null && pid != null && s.profileId !== pid) {
+      sessionReadyForPersistRef.current = true;
+      return;
+    }
+
+    if (s.editedResume) setEditedResume(s.editedResume);
+    setTransformersContext(s.transformersContext ?? {});
+    setGaps(s.gaps ?? null);
+    if (typeof s.fontSize === "number" && Number.isFinite(s.fontSize)) setFontSize(s.fontSize);
+    setFontSizeManual(!!s.fontSizeManual);
+    if (s.lastExportPath) setLastExportPath(s.lastExportPath);
+    sessionReadyForPersistRef.current = true;
+  }, [dataLoading, activeProfileId, profiles.length]);
+
+  /** Persist draft on change; flush on unmount (e.g. navigate away) so tab switch does not lose data. */
+  useEffect(() => {
+    if (dataLoading || !sessionReadyForPersistRef.current) return;
+    const t = window.setTimeout(flushEditorSessionToStorage, 300);
+    return () => {
+      window.clearTimeout(t);
+      flushEditorSessionToStorage();
+    };
+  }, [
+    dataLoading,
+    jdText,
+    editedResume,
+    transformersContext,
+    gaps,
+    fontSize,
+    fontSizeManual,
+    lastExportPath,
+    activeProfileId,
+  ]);
+
+  useEffect(() => {
+    if (!autoFitFontPulse) return;
+    const t = window.setTimeout(() => setAutoFitFontPulse(false), 900);
+    return () => window.clearTimeout(t);
+  }, [autoFitFontPulse]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(PREVIEW_WIDTH_STORAGE_KEY);
+      if (!raw) return;
+      const n = Number(raw);
+      if (Number.isFinite(n)) setPreviewWidthPx(Math.min(Math.max(n, PREVIEW_MIN_W), PREVIEW_MAX_W));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const previewWidthStyle = useMemo(() => {
+    if (previewWidthPx == null) return undefined;
+    return { width: previewWidthPx };
+  }, [previewWidthPx]);
+
+  useEffect(() => {
+    previewWidthPxRef.current = previewWidthPx;
+  }, [previewWidthPx]);
+
+  /** If the window narrows, clamp saved preview width so the editor keeps EDITOR_MIN_W. */
+  useEffect(() => {
+    const container = editorLayoutRef.current;
+    if (!container || previewWidthPx == null) return;
+    const clampToLayout = () => {
+      const containerW = container.getBoundingClientRect().width;
+      const maxByEditor = Math.max(PREVIEW_MIN_W, containerW - EDITOR_MIN_W);
+      const max = Math.min(PREVIEW_MAX_W, maxByEditor);
+      const cur = previewWidthPxRef.current;
+      if (cur != null && cur > max) {
+        setPreviewWidthPx(max);
+        try {
+          window.localStorage.setItem(PREVIEW_WIDTH_STORAGE_KEY, String(max));
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    const ro = new ResizeObserver(() => clampToLayout());
+    ro.observe(container);
+    clampToLayout();
+    return () => ro.disconnect();
+  }, [previewWidthPx]);
+
+  const startResize = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    // Only start on primary button / touch.
+    if ((e as unknown as { button?: number }).button === 2) return;
+    const container = (e.currentTarget.parentElement as HTMLDivElement | null);
+    const previewEl = container?.querySelector("[data-preview-panel]") as HTMLDivElement | null;
+    if (!container || !previewEl) return;
+
+    const handle = e.currentTarget as HTMLDivElement;
+    const pointerId = e.pointerId;
+
+    isResizingRef.current = true;
+    handle.setPointerCapture(pointerId);
+    const startX = e.clientX;
+    const startW = previewEl.getBoundingClientRect().width;
+
+    const clampW = (w: number) => {
+      const containerW = container.getBoundingClientRect().width;
+      const maxByEditor = Math.max(PREVIEW_MIN_W, containerW - EDITOR_MIN_W);
+      const max = Math.min(PREVIEW_MAX_W, maxByEditor);
+      return Math.min(Math.max(Math.round(w), PREVIEW_MIN_W), max);
+    };
+
+    const onMove = (ev: PointerEvent) => {
+      if (!isResizingRef.current) return;
+      const dx = ev.clientX - startX;
+      // Dragging handle right -> smaller preview; left -> larger preview.
+      const next = clampW(startW - dx);
+      setPreviewWidthPx(next);
+    };
+    const onUp = () => {
+      if (!isResizingRef.current) return;
+      isResizingRef.current = false;
+      try {
+        handle.releasePointerCapture(pointerId);
+      } catch {
+        /* ignore if already released */
+      }
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      try {
+        const cur = previewWidthPxRef.current;
+        if (cur != null) window.localStorage.setItem(PREVIEW_WIDTH_STORAGE_KEY, String(cur));
+      } catch {
+        // ignore
+      }
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }, []);
+
+  const onPreviewFrameLoad = useCallback((which: 0 | 1) => {
+    const expected = pendingCommitByFrameRef.current[which];
+    if (expected !== previewCommitRef.current) return;
+    visiblePreviewFrameRef.current = which;
+    setVisiblePreviewFrame(which);
+  }, []);
 
   useEffect(() => {
     (async () => {
       try {
-        const [cfg, shared] = await Promise.all([readConfig(), readShared()]);
+        let cfg = await readConfig();
+        const shared = await readShared();
+        let activeId = (cfg?.activeProfile as string) || null;
+        let profile = activeId ? await readProfileResume(activeId) : null;
+
+        // config.activeProfile can be missing or point at a deleted folder while profiles/ still
+        // has data. Sidecar GET /profiles resolves that; align local config + reload.
+        if (!profile) {
+          try {
+            const pr = await getProfiles();
+            const ids = new Set((pr.profiles || []).map((p) => p.id));
+            const resolved =
+              typeof pr.activeProfile === "string" && ids.has(pr.activeProfile)
+                ? pr.activeProfile
+                : pr.profiles?.[0]?.id ?? null;
+            if (resolved) {
+              profile = await readProfileResume(resolved);
+              if (profile) {
+                const needsWrite =
+                  !cfg ||
+                  !cfg.setupComplete ||
+                  cfg.activeProfile !== resolved ||
+                  !activeId ||
+                  (activeId && !ids.has(activeId));
+                if (needsWrite) {
+                  cfg = { ...(cfg || {}), setupComplete: true, activeProfile: resolved };
+                  await writeConfig(cfg).catch(() => {});
+                }
+              }
+            }
+          } catch {
+            /* sidecar not reachable — keep null profile */
+          }
+        }
+
         setConfig(cfg);
         setSharedData(shared);
         const dfSize = (cfg?.defaultFontSize as number) || 10;
         setDefaultFontSize(dfSize);
         setFontSize(dfSize);
-
-        const activeId = (cfg?.activeProfile as string) || null;
-        const profile = activeId ? await readProfileResume(activeId) : null;
         setProfileResume(profile);
 
         if (cfg && profile) {
           const order = getEffectiveSectionOrder(cfg, profile);
-          const active = (cfg.activeSections as string[]) || order;
+          const active = getEffectiveActiveSections(cfg, profile);
           setMasterSections(filterSections(profile, order, active));
         }
       } finally {
@@ -98,7 +378,7 @@ export default function Editor() {
   useEffect(() => {
     if (!editedResume || !config) return;
     const order = getEffectiveSectionOrder(config, editedResume);
-    const active = (config.activeSections as string[]) || order;
+    const active = getEffectiveActiveSections(config, editedResume);
     setEditedSections(filterSections(editedResume, order, active));
   }, [editedResume, config]);
 
@@ -116,13 +396,12 @@ export default function Editor() {
             resume: editedResume,
             template: (config.template as string) || "jake",
             section_order: getEffectiveSectionOrder(config, editedResume),
-            active_sections: (config.activeSections as string[]) || [],
+            active_sections: getEffectiveActiveSections(config, editedResume),
             font_size: fontSize,
           }),
         });
         if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: res.statusText }));
-          throw new Error(err.detail || "preview-pdf failed");
+          throw new Error(await readErrorDetailFromResponse(res));
         }
         const data = await res.json();
         if (cancelled) return;
@@ -131,8 +410,19 @@ export default function Editor() {
         } else {
           setOverflowWarning(null);
         }
-        const url = `${SIDECAR}/preview-pdf-file?v=${Date.now()}#toolbar=1&navpanes=0&scrollbar=0`;
-        setPreviewSrc(url);
+        const url = `${SIDECAR}/preview-pdf-file?v=${Date.now()}#${PREVIEW_PDF_HASH}`;
+        previewCommitRef.current += 1;
+        const c = previewCommitRef.current;
+        setPreviewFrameUrls(([a, b]) => {
+          if (a === null && b === null) {
+            pendingCommitByFrameRef.current[0] = c;
+            return [url, null];
+          }
+          const dormant: 0 | 1 = visiblePreviewFrameRef.current === 0 ? 1 : 0;
+          pendingCommitByFrameRef.current[dormant] = c;
+          if (dormant === 0) return [url, b];
+          return [a, url];
+        });
       } catch (err) {
         console.error("[preview-pdf]", err);
         if (!cancelled) setOverflowWarning(null);
@@ -153,9 +443,22 @@ export default function Editor() {
     setProfileResume(profile);
     setEditedResume(null);
     setEditedSections(null);
+    const cur = persistRef.current;
+    writeEditorSession(
+      buildEditorSession({
+        profileId,
+        jdText: cur.jdText,
+        editedResume: null,
+        transformersContext: {},
+        gaps: null,
+        fontSize: cur.fontSize,
+        fontSizeManual: cur.fontSizeManual,
+        lastExportPath: cur.lastExportPath,
+      }),
+    );
     if (config && profile) {
       const order = getEffectiveSectionOrder(config, profile);
-      const active = (config.activeSections as string[]) || order;
+      const active = getEffectiveActiveSections(config, profile);
       setMasterSections(filterSections(profile, order, active));
     }
   }
@@ -167,39 +470,63 @@ export default function Editor() {
   }
 
   async function handleEdit() {
-    if (!jdText.trim() || !profileResume) return;
+    if (!jdText.trim() || !activeProfileId) return;
     setLoading(true);
     setError(null);
+    setGaps(null);
 
     try {
+      // Always read the active profile + shared data at click time to avoid stale-state bugs.
+      const [freshShared, freshProfile] = await Promise.all([readShared(), readProfileResume(activeProfileId)]);
+      if (!freshProfile) throw new Error("Could not load the active profile resume");
+      setSharedData(freshShared);
+      setProfileResume(freshProfile);
+
       const sharedBasics = {
-        basics: sharedData?.basics ?? {},
-        education: sharedData?.education ?? [],
+        basics: (freshShared?.basics as Record<string, unknown>) ?? {},
+        education: (freshShared?.education as unknown[]) ?? [],
       };
 
-      const res = await fetch(`${SIDECAR}/edit-resume`, {
+      const editPayload = {
+        jd_text: jdText,
+        profile_id: activeProfileId,
+        profile_resume: freshProfile,
+        profile_name: activeProfileName || "",
+        basics: sharedBasics,
+        shared_education: (freshShared?.education as unknown[]) ?? [],
+        user_instructions: (config?.userInstructions as string) || "",
+        llm_config: await fullLlmConfig(),
+        transformers_context: transformersContext,
+      };
+      const editInit: RequestInit = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jd_text: jdText,
-          profile_resume: profileResume,
-          profile_name: activeProfileName || "",
-          basics: sharedBasics,
-          shared_education: (sharedData?.education as unknown[]) ?? [],
-          user_instructions: (config?.userInstructions as string) || "",
-          llm_config: await fullLlmConfig(),
-          transformers_context: transformersContext,
-        }),
-      });
+        body: JSON.stringify(editPayload),
+      };
+
+      let res: Response;
+      try {
+        res = await fetch(`${SIDECAR}/edit-resume`, editInit);
+      } catch (first) {
+        const msg = first instanceof Error ? first.message.toLowerCase() : "";
+        const transient =
+          msg.includes("load failed") || msg.includes("failed to fetch") || msg.includes("network");
+        if (transient) {
+          await new Promise((r) => setTimeout(r, 2500));
+          res = await fetch(`${SIDECAR}/edit-resume`, editInit);
+        } else {
+          throw first;
+        }
+      }
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(err.detail || "Edit failed");
+        throw new Error(await readErrorDetailFromResponse(res));
       }
 
       const data = await res.json();
-      // sharedData has basics + education; data.resume has LLM-tailored profile sections
-      setEditedResume({ ...(sharedData ?? {}), ...data.resume });
+      // freshShared has basics + education; data.resume has LLM-tailored profile sections
+      setEditedResume({ ...(freshShared ?? {}), ...data.resume });
+      if (data && typeof data === "object" && data.gaps) setGaps(data.gaps);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to edit resume");
     } finally {
@@ -233,8 +560,7 @@ export default function Editor() {
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(err.detail || "Re-ask failed");
+      throw new Error(await readErrorDetailFromResponse(res));
     }
 
     const data = await res.json();
@@ -245,6 +571,7 @@ export default function Editor() {
     if (!editedResume || !config) return;
     setExportLoading(true);
     setError(null);
+    const exportUsesAutoFit = autoFitOnExportEnabled(config) && !fontSizeManual;
     try {
       const res = await fetch(`${SIDECAR}/export-pdf`, {
         method: "POST",
@@ -253,10 +580,10 @@ export default function Editor() {
           resume: editedResume,
           template: (config?.template as string) || "jake",
           section_order: getEffectiveSectionOrder(config, editedResume),
-          active_sections: (config.activeSections as string[]) || [],
+          active_sections: getEffectiveActiveSections(config, editedResume),
           save_path: (config?.savePath as string) || "~/Documents/Resumes",
           font_size: sizeToUse,
-          auto_fit: !fontSizeManual,
+          auto_fit: exportUsesAutoFit,
           profile_id: activeProfileId || "",
           profile_name: activeProfileName || "",
           jd_text: jdText,
@@ -264,19 +591,31 @@ export default function Editor() {
         }),
       });
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(err.detail || "Export failed");
-      }
+        if (!res.ok) {
+          throw new Error(await readErrorDetailFromResponse(res));
+        }
 
       const data = await res.json();
       setLastExportPath(data.file_path);
 
-      if (typeof data.font_size === "number" && data.font_size !== fontSize) {
-        setFontSize(data.font_size);
+      const chosen =
+        typeof data.font_size === "number" && Number.isFinite(data.font_size) ? data.font_size : sizeToUse;
+      if (chosen !== fontSize) {
+        setFontSize(chosen);
       }
       if (typeof data.overflow_warning === "string" && data.overflow_warning) {
         setOverflowWarning(data.overflow_warning);
+      } else {
+        setOverflowWarning(null);
+      }
+
+      const shrunk = exportUsesAutoFit && chosen < sizeToUse - 1e-6;
+      if (shrunk) {
+        setAutoFitFontPulse(true);
+        setAutoFitNotice(
+          `Saved at ${chosen} pt — auto-fit reduced the font so the PDF fits on one page. Disable “Auto-fit font on Save” in Settings → Resume Layout if you always want the size shown above.`,
+        );
+        window.setTimeout(() => setAutoFitNotice(null), 10000);
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Export failed");
@@ -331,6 +670,12 @@ export default function Editor() {
   useEffect(() => {
     if (profiles.length <= 1) return;
     if (jdText.trim().length <= 50) return;
+
+    // Clear user override when they paste a substantially different JD (first 100 chars differ).
+    if (userOverrideRef.current && jdText.slice(0, 100) !== overrideJdSnapshotRef.current.slice(0, 100)) {
+      userOverrideRef.current = false;
+    }
+
     let cancelled = false;
     setJdAiLoading(true);
     const t = window.setTimeout(async () => {
@@ -344,7 +689,7 @@ export default function Editor() {
         const keywords = extractKeywords(jdText, 10);
         const seniority = detectSeniority(jdText);
         const company_type = detectCompanyType(jdText);
-        const weak_bullet_indices = weakBulletIndicesFromResume(jdText, profileResume, 6);
+        const weak_bullet_indices = weakBulletIndicesFromResume(jdText, profileResumeRef.current, 6);
         setTransformersContext({
           detected_role: match?.name ?? matchResult.classifierTopLabel ?? detectedRole ?? undefined,
           keywords,
@@ -354,8 +699,9 @@ export default function Editor() {
           weak_bullet_indices,
         });
 
-        if (match?.id && match.id !== activeProfileId) {
-          await switchTo(match.id);
+        // Skip auto-switch if the user has manually chosen a profile for this JD.
+        if (!userOverrideRef.current && match?.id && match.id !== activeProfileIdRef.current) {
+          await switchToRef.current(match.id);
           await loadProfileData(match.id);
           showProfileToast(`Switching to ${match.name} profile`);
         }
@@ -371,7 +717,9 @@ export default function Editor() {
       window.clearTimeout(t);
       setJdAiLoading(false);
     };
-  }, [jdText, profiles, activeProfileId, activeProfileName, switchTo, profileResume]);
+  // Intentionally exclude activeProfileId, switchTo, profileResume — accessed via refs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jdText, profiles]);
 
   if (dataLoading) {
     return (
@@ -381,7 +729,8 @@ export default function Editor() {
     );
   }
 
-  if (!config?.setupComplete || !profileResume) {
+  // Require profile data; setupComplete alone can be false on disk while profiles/ still exists.
+  if (!profileResume) {
     return (
       <div className="app-canvas flex min-h-screen flex-col">
         <div className="flex flex-1 items-center justify-center p-6">
@@ -406,7 +755,7 @@ export default function Editor() {
     <div className="app-canvas flex h-screen overflow-hidden transition-colors duration-200">
       <AppSidebar active="editor" config={config} />
 
-      <div className="flex min-w-0 flex-1 gap-3 p-3">
+      <div ref={editorLayoutRef} className="flex min-h-0 min-w-0 flex-1 gap-3 p-3">
         <Surface variant="panel" className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex-1 overflow-y-auto px-6 py-6">
             <div className="mx-auto max-w-3xl space-y-8">
@@ -420,6 +769,8 @@ export default function Editor() {
                           onChange={async (e) => {
                             const next = e.target.value;
                             if (next && next !== activeProfileId) {
+                              userOverrideRef.current = true;
+                              overrideJdSnapshotRef.current = jdText;
                               try {
                                 await switchTo(next);
                                 await loadProfileData(next);
@@ -507,17 +858,53 @@ export default function Editor() {
                 <div className="flex flex-col items-center justify-center py-14">
                   <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
                   <TypographyMuted className="mt-4">Shaping your experience to fit this role…</TypographyMuted>
+                  <TypographyMuted className="mt-2 max-w-sm text-center text-xs leading-snug">
+                    Slow models (for example Gemma) can take many minutes and many API calls. Keep this window open and
+                    awake until it finishes—closing or sleeping can show “Load failed” even though the server is still
+                    working.
+                  </TypographyMuted>
                 </div>
               )}
 
-              {error && (
-                <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50/90 p-4 dark:border-red-900/50 dark:bg-red-950/30">
-                  <span className="text-red-600 dark:text-red-400">✕</span>
-                  <span className="flex-1 text-sm text-red-800 dark:text-red-200">{error}</span>
-                  <button type="button" onClick={handleEdit} className="text-sm font-medium text-red-700 underline dark:text-red-300">
-                    Retry
-                  </button>
-                </div>
+              {error && (() => {
+                const fe = formatAiError(error);
+                return (
+                  <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50/90 p-4 dark:border-red-900/50 dark:bg-red-950/30">
+                    <span className="text-red-600 dark:text-red-400">✕</span>
+                    <div className="min-w-0 flex-1 text-sm text-red-800 dark:text-red-200">
+                      <div className="font-semibold text-red-900 dark:text-red-100">{fe.title}</div>
+                      <p className="mt-1 leading-snug">{fe.message}</p>
+                      {fe.raw !== fe.message ? (
+                        <details className="mt-2 text-[11px] text-red-700/90 dark:text-red-300/90">
+                          <summary className="cursor-pointer select-none">Full detail</summary>
+                          <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono">{fe.raw}</pre>
+                        </details>
+                      ) : null}
+                    </div>
+                    <button type="button" onClick={handleEdit} className="shrink-0 text-sm font-medium text-red-700 underline dark:text-red-300">
+                      Retry
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {gaps && (Array.isArray(gaps.missing_skills) ? gaps.missing_skills.length > 0 : false) && !loading && (
+                <Surface variant="inset" className="rounded-xl border border-amber-200/80 bg-amber-50/80 p-4 dark:border-amber-900/50 dark:bg-amber-950/25">
+                  <div className="text-sm font-semibold text-amber-900 dark:text-amber-100">Missing skills (not found in your resume)</div>
+                  <TypographyMuted className="mt-1 text-xs text-amber-800/90 dark:text-amber-200/90">
+                    These appeared in the job description, but weren&apos;t found anywhere in your resume text, so we did not add them automatically.
+                  </TypographyMuted>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {gaps.missing_skills!.slice(0, 18).map((s) => (
+                      <span
+                        key={s}
+                        className="rounded-full border border-amber-200/70 bg-white/60 px-2.5 py-1 text-[11px] font-medium text-amber-900 dark:border-amber-800/60 dark:bg-white/[0.06] dark:text-amber-100"
+                      >
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                </Surface>
               )}
 
               {editedSections && !loading && (
@@ -538,50 +925,121 @@ export default function Editor() {
 
         </Surface>
 
-        <Surface variant="panel" className="flex w-[min(44vw,520px)] shrink-0 flex-col overflow-hidden">
-          <div className="relative min-h-0 flex-1 bg-transparent dark:bg-white/[0.03]">
-            {previewSrc && (
-              <object
-                key={previewSrc}
-                data={previewSrc}
-                type="application/pdf"
-                className="h-full w-full"
-                style={{ display: "block", minHeight: "100%" }}
-              />
-            )}
-            <AnimatePresence>
-              {previewLoading && (
-                <motion.div
-                  key="preview-loading"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.18 }}
-                  className={`absolute inset-0 flex items-center justify-center backdrop-blur-[2px] ${
-                    previewSrc ? "bg-white/65 dark:bg-[#1C1C1E]/65" : ""
-                  }`}
-                >
-                  <div className="text-center">
-                    <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-gray-400 border-t-brand-600" />
-                    <TypographyMuted className="mt-3">Updating preview…</TypographyMuted>
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize preview panel"
+          onPointerDown={startResize}
+          className={cn(
+            "group relative -mx-1 w-2 shrink-0 cursor-col-resize select-none touch-none",
+            "before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-black/10 dark:before:bg-white/10",
+            "hover:before:bg-black/20 dark:hover:before:bg-white/20",
+          )}
+        />
+
+        <Surface
+          data-preview-panel
+          variant="panel"
+          className={cn(
+            "flex min-h-0 shrink-0 flex-col self-stretch overflow-hidden",
+            previewWidthPx == null && "w-[min(44vw,520px)]",
+          )}
+          style={previewWidthStyle}
+        >
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div
+              ref={previewMeasureRef}
+              className="relative flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto bg-transparent px-0.5 py-2"
+            >
+              {/*
+                Fixed “sheet” viewport (US Letter aspect). It does not grow/shrink with font size.
+                PDF #view=Fit scales each page inside this frame; font changes the document only.
+              */}
+              <div className="relative w-full max-w-full shrink-0 aspect-[8.5/11] overflow-hidden rounded-md bg-neutral-100/90 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.06)] dark:bg-neutral-900/40 dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]">
+                {previewFrameUrls[0] ? (
+                  <iframe
+                    title="Resume PDF preview"
+                    src={previewFrameUrls[0]}
+                    onLoad={() => onPreviewFrameLoad(0)}
+                    className={cn(
+                      "absolute inset-0 block h-full w-full border-0 bg-white",
+                      visiblePreviewFrame === 0 ? "z-10 opacity-100" : "pointer-events-none z-0 opacity-0",
+                    )}
+                  />
+                ) : null}
+                {previewFrameUrls[1] ? (
+                  <iframe
+                    title="Resume PDF preview"
+                    src={previewFrameUrls[1]}
+                    onLoad={() => onPreviewFrameLoad(1)}
+                    className={cn(
+                      "absolute inset-0 block h-full w-full border-0 bg-white",
+                      visiblePreviewFrame === 1 ? "z-10 opacity-100" : "pointer-events-none z-0 opacity-0",
+                    )}
+                  />
+                ) : null}
+                <AnimatePresence>
+                  {previewLoading && (
+                    <motion.div
+                      key="preview-loading"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.18 }}
+                      className="absolute inset-0 z-20 flex items-center justify-center bg-white/70 backdrop-blur-[2px] dark:bg-neutral-900/55"
+                    >
+                      <div className="text-center">
+                        <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-gray-400 border-t-brand-600" />
+                        <TypographyMuted className="mt-3">Updating preview…</TypographyMuted>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                {!previewFrameUrls[0] && !previewFrameUrls[1] && !previewLoading && (
+                  <div className="absolute inset-0 z-[5] flex items-center justify-center bg-white/40 p-6 dark:bg-neutral-950/20">
+                    <div className="text-center text-gray-500 dark:text-gray-400">
+                      <div className="text-5xl opacity-20">📄</div>
+                      <p className="mt-3 text-sm">Tailor your resume to see a live preview here.</p>
+                    </div>
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-            {!previewSrc && !previewLoading && (
-              <div className="absolute inset-0 flex items-center justify-center p-8">
-                <div className="text-center text-gray-500 dark:text-gray-400">
-                  <div className="text-5xl opacity-20">📄</div>
-                  <p className="mt-3 text-sm">Tailor your resume to see a live preview here.</p>
-                </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
 
           <div className="shrink-0 space-y-2.5 border-t border-white/25 px-3 py-3 dark:border-white/10">
+            <AnimatePresence>
+              {autoFitNotice ? (
+                <motion.div
+                  key="autofit-notice"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.22 }}
+                  className="rounded-lg border border-emerald-200/90 bg-emerald-50 px-3 py-2 text-[11px] leading-snug text-emerald-950 shadow-sm dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-50"
+                >
+                  {autoFitNotice}
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
             <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
               <span className="shrink-0 text-xs font-medium text-gray-500 dark:text-gray-400">Font Size</span>
-              <div className="flex min-w-0 max-w-full items-center gap-1.5">
+              <motion.div
+                className="flex min-w-0 max-w-full items-center gap-1.5 rounded-xl"
+                animate={
+                  autoFitFontPulse
+                    ? {
+                        scale: [1, 1.055, 1],
+                        boxShadow: [
+                          "0 0 0 0px rgba(16,185,129,0)",
+                          "0 0 0 5px rgba(16,185,129,0.35)",
+                          "0 0 0 0px rgba(16,185,129,0)",
+                        ],
+                      }
+                    : {}
+                }
+                transition={{ duration: 0.75, ease: [0.22, 1, 0.36, 1] }}
+              >
                 <SegmentedControl
                   className="min-w-0 max-w-[min(268px,100%)]"
                   size="sm"
@@ -589,11 +1047,12 @@ export default function Editor() {
                   onChange={(v) => {
                     setFontSize(Number(v));
                     setFontSizeManual(true);
+                    setAutoFitNotice(null);
                   }}
                   options={FONT_SIZES.map((s) => ({ value: String(s), label: String(s) }))}
                 />
                 <span className="shrink-0 text-[13px] font-medium tabular-nums text-gray-500 dark:text-gray-400">pt</span>
-              </div>
+              </motion.div>
               {fontSizeManual && fontSize !== defaultFontSize && (
                 <span className="shrink-0 text-[10px] text-amber-600 dark:text-amber-400">≠ saved default</span>
               )}

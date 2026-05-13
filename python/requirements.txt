@@ -51,6 +51,7 @@ google-api-python-client==2.193.0
 google-auth==2.49.1
 google-auth-httplib2==0.3.1
 google-generativeai==0.8.0
+google-genai>=1.2.0
 googleapis-common-protos==1.74.0
 graphene==3.4.3
 graphql-core==3.2.6
@@ -161,6 +162,7 @@ rpds-py==0.20.0
 Rx==1.6.3
 safetensors==0.4.5
 scapy==2.6.0
+spacy>=3.7.0
 scikit-learn==1.5.2
 scipy==1.14.1
 Send2Trash==1.8.3

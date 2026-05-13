@@ -3,6 +3,7 @@ import { Button } from "../ui";
 import { cn } from "../ui/cn";
 import { PlugZap } from "lucide-react";
 import { formatAiError } from "../ui/errorFormat";
+import { readErrorDetailFromResponse } from "../lib/httpError";
 
 interface ProviderField {
   key: string;
@@ -44,7 +45,16 @@ const PROVIDERS: Array<{
           { value: "gemini-3-flash-preview",       label: "gemini-3-flash-preview",       note: "Latest flash, fast general use" },
           { value: "gemini-3.1-pro-preview",       label: "gemini-3.1-pro-preview",       note: "Best quality for complex reasoning and coding" },
           { value: "gemini-3.1-flash-lite-preview",label: "gemini-3.1-flash-lite-preview",note: "Fastest, low latency and high volume" },
-          { value: "gemma-4-31b-it",               label: "gemma-4-31b-it",               note: "Open-weight model" },
+          {
+            value: "gemma-4-31b-it",
+            label: "gemma-4-31b-it",
+            note: "Open model; uses the same google.generativeai API path as AI Studio Python snippets.",
+          },
+          {
+            value: "models/gemma-4-31b-it",
+            label: "models/gemma-4-31b-it",
+            note: "Alternate model id form if the short name fails.",
+          },
         ],
       },
     ],
@@ -138,8 +148,18 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
         // Merge api_key in for this call only; it never lives in value/localStorage
         body: JSON.stringify({ llm_config: { ...value, api_key: apiKey } }),
       });
+      if (!res.ok) {
+        const detail = await readErrorDetailFromResponse(res);
+        setTestStatus((p) => ({ ...p, [provider]: "error" }));
+        setTestMessages((p) => ({
+          ...p,
+          [provider]: `${res.status}: ${detail}`,
+        }));
+        return;
+      }
+
       const data = await res.json();
-      if (res.ok && data.success) {
+      if (data.success) {
         setTestStatus((p) => ({ ...p, [provider]: "ok" }));
         setTestMessages((p) => ({ ...p, [provider]: "Connected! Model is responding." }));
         onTestSuccess?.();
@@ -152,8 +172,10 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
               : typeof data?.message === "string"
                 ? data.message
                 : "Connection failed";
+        const hint =
+          typeof data?.error_code === "number" ? ` [provider ${data.error_code}]` : "";
         setTestStatus((p) => ({ ...p, [provider]: "error" }));
-        setTestMessages((p) => ({ ...p, [provider]: `Error code: ${res.status} - ${rawError}` }));
+        setTestMessages((p) => ({ ...p, [provider]: `${rawError}${hint}` }));
       }
     } catch {
       setTestStatus((p) => ({ ...p, [provider]: "error" }));
@@ -253,10 +275,11 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
             {status === "ok" && (
               <span className="text-emerald-600 dark:text-emerald-400 text-sm">✅ {message}</span>
             )}
-            {status === "error" && (
-              <span className="text-red-600 dark:text-red-400 text-sm" title={friendlyError?.raw}>
-                ❌ {friendlyError?.message || message}
-              </span>
+            {status === "error" && friendlyError && (
+              <div className="max-w-xl text-sm text-red-600 dark:text-red-400" title={friendlyError.raw}>
+                <div className="font-semibold">❌ {friendlyError.title}</div>
+                <p className="mt-0.5 leading-snug">{friendlyError.message}</p>
+              </div>
             )}
           </div>
         </div>

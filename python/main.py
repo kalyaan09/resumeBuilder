@@ -2,8 +2,11 @@ import sys
 import os
 
 import logging
+from pathlib import Path
 
-LOG_FILE = "/tmp/resume_debug.log"
+_LOG_DIR = Path.home() / ".resume-editor"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = str(_LOG_DIR / "sidecar.log")
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -35,6 +38,7 @@ from llm_client import LLMClient
 from pdf_exporter import export_to_pdf, render_preview_pdf_to_path, render_html, render_pdf_to_path
 from resume_extractor import extract_resume_to_json
 from presets import get_preset
+from pipeline.controller import run_pipeline, analyze_critic_patterns
 
 _VALID_TEMPLATES = {"jake", "faangpath", "sb2nov", "myresume"}
 
@@ -681,10 +685,10 @@ def validate_template(req: ValidateTemplateRequest):
 
 # ── Resume editing ────────────────────────────────────────────────────────────
 
-_STATIC_SYSTEM_PROMPT = """You are a resume emphasizer, not a resume rewriter.
+_STATIC_SYSTEM_PROMPT = """You are a resume emphasizer, not a fiction writer.
 
 YOUR CORE JOB:
-Read the resume carefully. Find what already matches the JD strongly — leave those parts EXACTLY as written. Only touch what genuinely needs improvement. The best output changes as little as possible while maximizing JD alignment.
+Read the resume and job description. Strengthen JD alignment in the summary and experience bullets: visible themes and keywords from the posting where they truthfully match the candidate's work. Do not edit for the sake of editing, but invisible or copy-paste output is a failure—the reader should see this resume was tuned to THIS job.
 
 WHAT TO PRESERVE (never change these):
 - All specific numbers and metrics exactly as written
@@ -924,40 +928,65 @@ def edit_resume(req: EditResumeRequest):
             req.basics, req.profile_resume, config, skill_allowlist
         )
 
-        dynamic_prompt = build_dynamic_prompt(
-            profile_resume=req.profile_resume,
-            basics=req.basics,
-            jd_text=req.jd_text,
-            candidate_persona=candidate_persona,
-            user_instructions=req.user_instructions,
-            transformers_context=req.transformers_context,
-        )
+        try:
+            validated, violations = run_pipeline(
+                profile_resume=req.profile_resume,
+                basics=req.basics,
+                jd_text=req.jd_text,
+                transformers_context=req.transformers_context,
+                user_instructions=req.user_instructions,
+                llm_config=req.llm_config,
+                config=config,
+                candidate_persona=candidate_persona,
+                skill_allowlist=skill_allowlist,
+            )
+            log.info(
+                "[edit-resume] pipeline succeeded — keys=%s violations=%d experience_blocks=%d",
+                list(validated.keys()),
+                len(violations),
+                len(validated.get("experience", [])),
+            )
+            log.debug("[edit-resume] pipeline return snippet: %s", json.dumps(validated)[:600])
+            return {"resume": validated, "pipeline_violations": violations}
 
-        llm = LLMClient.from_config(req.llm_config)
-        raw = llm.complete(
-            static_prompt=_STATIC_SYSTEM_PROMPT,
-            dynamic_prompt=dynamic_prompt,
-            max_tokens=8192,
-        )
-        log.info("[edit-resume] raw response length: %d chars", len(raw))
-        log.debug("[edit-resume] raw[:500]: %s", raw[:500])
-
-        # Strip code fences if model ignored the instruction
-        clean = raw.strip()
-        if clean.startswith("```"):
-            clean = re.sub(r"^```[a-z]*\n?", "", clean)
-            clean = re.sub(r"\n?```$", "", clean)
-
-        edited = json.loads(clean)
-        validated = validate_output(req.profile_resume, edited, skill_allowlist)
-        log.info("[edit-resume] parsed OK, keys: %s", list(validated.keys()))
-
-        return {"resume": validated}
+        except Exception as pipeline_err:
+            log.warning(
+                "[edit-resume] pipeline failed (%s) — falling back to single-LLM call",
+                pipeline_err,
+            )
+            # ── Fallback: original single-LLM approach ──────────────────────
+            dynamic_prompt = build_dynamic_prompt(
+                profile_resume=req.profile_resume,
+                basics=req.basics,
+                jd_text=req.jd_text,
+                candidate_persona=candidate_persona,
+                user_instructions=req.user_instructions,
+                transformers_context=req.transformers_context,
+            )
+            llm = LLMClient.from_config(req.llm_config)
+            raw = llm.complete(
+                static_prompt=_STATIC_SYSTEM_PROMPT,
+                dynamic_prompt=dynamic_prompt,
+                max_tokens=8192,
+            )
+            clean = raw.strip()
+            if clean.startswith("```"):
+                clean = re.sub(r"^```[a-z]*\n?", "", clean)
+                clean = re.sub(r"\n?```$", "", clean)
+            edited = json.loads(clean)
+            validated = validate_output(req.profile_resume, edited, skill_allowlist)
+            log.info(
+                "[edit-resume] fallback OK — keys=%s experience_blocks=%d",
+                list(validated.keys()),
+                len(validated.get("experience", [])),
+            )
+            log.debug("[edit-resume] fallback return snippet: %s", json.dumps(validated)[:600])
+            return {"resume": validated, "pipeline_violations": []}
 
     except HTTPException:
         raise
     except json.JSONDecodeError as e:
-        log.error("[edit-resume] JSON parse failed: %s | raw[:200]: %s", e, locals().get("raw", "")[:200])
+        log.error("[edit-resume] JSON parse failed: %s", e)
         raise HTTPException(status_code=500, detail=f"LLM returned invalid JSON: {e}")
     except Exception as e:
         log.exception("[edit-resume] error")
@@ -1234,6 +1263,33 @@ def export_pdf(req: ExportPdfRequest):
     except Exception as e:
         log.exception("[export-pdf] error")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/history")
+def get_export_history():
+    """Return PDF export history from ~/.resume-editor/history.json (newest entries last in file)."""
+    history_path = Path.home() / ".resume-editor" / "history.json"
+    if not history_path.exists():
+        return {"applications": []}
+    try:
+        with open(history_path, encoding="utf-8") as f:
+            data = json.load(f)
+        apps = data.get("applications")
+        if not isinstance(apps, list):
+            return {"applications": []}
+        return {"applications": apps}
+    except Exception as e:
+        log.warning("[history] read failed: %s", e)
+        return {"applications": []}
+
+
+@app.get("/prompt-health")
+def prompt_health():
+    """
+    Return the top recurring pipeline violation rules from pipeline_violations.json.
+    Use this to identify which Critic rules fire most often and tune prompts accordingly.
+    """
+    return analyze_critic_patterns()
 
 
 # ── Resume quality review ─────────────────────────────────────────────────────

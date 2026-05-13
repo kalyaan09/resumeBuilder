@@ -118,3 +118,19 @@ export function getEffectiveSectionOrder(
   if (!custom || !Array.isArray(po) || po.length === 0) return base;
   return normalizeSectionOrder([...(po as string[])]);
 }
+
+/**
+ * Sections to include in UI/PDF. Config may omit `activeSections`, or it may be stored as `[]`
+ * (empty arrays are truthy in JS, so `active || order` is wrong). Fall back to full section order.
+ */
+export function getEffectiveActiveSections(
+  config: Record<string, unknown> | null | undefined,
+  mergedResume: Record<string, unknown> | null | undefined
+): string[] {
+  const order = getEffectiveSectionOrder(config, mergedResume);
+  const raw = config?.activeSections;
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw.filter((k): k is string => typeof k === "string");
+  }
+  return order;
+}
