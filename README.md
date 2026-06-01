@@ -1,6 +1,9 @@
 # Resume Pro
 
-A local-first macOS desktop app for AI-powered resume tailoring. Paste a job description, run the pipeline, and get a tailored resume exported as a polished PDF — all running on your machine, no cloud required.
+A local-first macOS desktop app for AI-powered resume tailoring. Paste a job description, run the pipeline, and get a tailored resume exported as a polished PDF, all running on your machine, no cloud required.
+
+## Download
+[Resume Pro v0.1.0 — macOS (Apple Silicon)](https://github.com/kalyaan09/resumeBuilder/releases/tag/v0.1.0)
 
 ## Tech Stack
 
