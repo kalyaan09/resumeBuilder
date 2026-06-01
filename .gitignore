@@ -5,6 +5,10 @@ dist/
 # Rust / Tauri
 src-tauri/target/
 src-tauri/target/release/bundle/
+src-tauri/icons/android/
+src-tauri/icons/ios/
+src-tauri/icons/Square*.png
+src-tauri/icons/StoreLogo.png
 
 # Python
 python/__pycache__/
@@ -26,6 +30,7 @@ python/*.spec
 # Local screenshots (reference only)
 UI SS/
 env/
+python/env/
 src-tauri/binaries/
 src-tauri/target/
 python/__pycache__/
@@ -36,3 +41,6 @@ python/__pycache__/
 resapp/
 claude_code_gap_prompt.md
 PROJECT_DOCS.md
+template/myresume.extracted.json
+icon/Subject.PNG
+icon/Subject.square.png
