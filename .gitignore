@@ -19,6 +19,7 @@ python/*.pyo
 python/dist/
 python/build/
 python/*.spec
+!python/resume-sidecar.spec
 
 # Environment / secrets
 .env
