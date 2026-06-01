@@ -33,6 +33,8 @@ import base64
 import shutil
 from pathlib import Path
 from datetime import datetime
+import threading
+import uuid
 
 from llm_client import LLMClient
 from pdf_exporter import export_to_pdf, render_preview_pdf_to_path, render_html, render_pdf_to_path
@@ -890,38 +892,25 @@ def _extract_json(raw: str) -> dict:
     Robustly extract a JSON object from an LLM response.
     Handles: code fences, preamble text, postamble text.
     """
-    raw = raw.strip()
-
-    # Strip code fences (```json ... ``` or ``` ... ```)
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-        if "```" in raw:
-            raw = raw.rsplit("```", 1)[0]
-        raw = raw.strip()
-
-    # If there's preamble text before the JSON object, skip to the first {
-    if not raw.startswith("{"):
-        idx = raw.find("{")
-        if idx == -1:
-            raise json.JSONDecodeError("No JSON object found", raw, 0)
-        raw = raw[idx:]
-
-    # If there's postamble text after the JSON object, trim to the last }
-    if not raw.endswith("}"):
-        idx = raw.rfind("}")
-        if idx == -1:
-            raise json.JSONDecodeError("No closing } found", raw, len(raw))
-        raw = raw[: idx + 1]
-
-    return json.loads(raw)
+    from pipeline.utils import robust_parse
+    return robust_parse(raw)
 
 
-@app.post("/edit-resume")
-def edit_resume(req: EditResumeRequest):
+# ── Job store for async tailoring ─────────────────────────────────────────────
+# Keeps at most 20 recent jobs; older ones are evicted on each new submission.
+_jobs: dict[str, dict] = {}
+_JOBS_MAX = 20
+
+
+def _evict_old_jobs() -> None:
+    if len(_jobs) >= _JOBS_MAX:
+        oldest = sorted(_jobs.keys())[: len(_jobs) - _JOBS_MAX + 1]
+        for k in oldest:
+            _jobs.pop(k, None)
+
+
+def _run_edit_job(job_id: str, req: "EditResumeRequest") -> None:
     try:
-        if not req.llm_config:
-            raise HTTPException(status_code=400, detail="No model configured")
-
         config = _load_config()
         skill_allowlist = build_skill_allowlist(req.profile_resume)
         candidate_persona = build_candidate_persona(
@@ -942,19 +931,13 @@ def edit_resume(req: EditResumeRequest):
             )
             log.info(
                 "[edit-resume] pipeline succeeded — keys=%s violations=%d experience_blocks=%d",
-                list(validated.keys()),
-                len(violations),
-                len(validated.get("experience", [])),
+                list(validated.keys()), len(violations), len(validated.get("experience", [])),
             )
             log.debug("[edit-resume] pipeline return snippet: %s", json.dumps(validated)[:600])
-            return {"resume": validated, "pipeline_violations": violations}
+            _jobs[job_id] = {"status": "done", "resume": validated, "pipeline_violations": violations}
 
         except Exception as pipeline_err:
-            log.warning(
-                "[edit-resume] pipeline failed (%s) — falling back to single-LLM call",
-                pipeline_err,
-            )
-            # ── Fallback: original single-LLM approach ──────────────────────
+            log.warning("[edit-resume] pipeline failed (%s) — falling back to single-LLM call", pipeline_err)
             dynamic_prompt = build_dynamic_prompt(
                 profile_resume=req.profile_resume,
                 basics=req.basics,
@@ -964,33 +947,43 @@ def edit_resume(req: EditResumeRequest):
                 transformers_context=req.transformers_context,
             )
             llm = LLMClient.from_config(req.llm_config)
-            raw = llm.complete(
-                static_prompt=_STATIC_SYSTEM_PROMPT,
-                dynamic_prompt=dynamic_prompt,
-                max_tokens=8192,
-            )
+            raw = llm.complete(static_prompt=_STATIC_SYSTEM_PROMPT, dynamic_prompt=dynamic_prompt, max_tokens=8192)
             clean = raw.strip()
             if clean.startswith("```"):
                 clean = re.sub(r"^```[a-z]*\n?", "", clean)
                 clean = re.sub(r"\n?```$", "", clean)
             edited = json.loads(clean)
             validated = validate_output(req.profile_resume, edited, skill_allowlist)
-            log.info(
-                "[edit-resume] fallback OK — keys=%s experience_blocks=%d",
-                list(validated.keys()),
-                len(validated.get("experience", [])),
-            )
+            log.info("[edit-resume] fallback OK — keys=%s experience_blocks=%d",
+                     list(validated.keys()), len(validated.get("experience", [])))
             log.debug("[edit-resume] fallback return snippet: %s", json.dumps(validated)[:600])
-            return {"resume": validated, "pipeline_violations": []}
+            _jobs[job_id] = {"status": "done", "resume": validated, "pipeline_violations": []}
 
-    except HTTPException:
-        raise
     except json.JSONDecodeError as e:
         log.error("[edit-resume] JSON parse failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"LLM returned invalid JSON: {e}")
+        _jobs[job_id] = {"status": "error", "message": f"LLM returned invalid JSON: {e}"}
     except Exception as e:
         log.exception("[edit-resume] error")
-        raise HTTPException(status_code=500, detail=str(e))
+        _jobs[job_id] = {"status": "error", "message": str(e)}
+
+
+@app.post("/edit-resume")
+def edit_resume(req: EditResumeRequest):
+    if not req.llm_config:
+        raise HTTPException(status_code=400, detail="No model configured")
+    _evict_old_jobs()
+    job_id = str(uuid.uuid4())
+    _jobs[job_id] = {"status": "pending"}
+    threading.Thread(target=_run_edit_job, args=(job_id, req), daemon=True).start()
+    return {"job_id": job_id}
+
+
+@app.get("/edit-resume/poll/{job_id}")
+def poll_edit_job(job_id: str):
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 @app.post("/reask-section")

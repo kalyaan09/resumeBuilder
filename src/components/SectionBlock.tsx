@@ -284,52 +284,49 @@ function ExperienceEntry({
     <div className="group border-b border-gray-100 py-3.5 dark:border-gray-700 last:border-0">
       <div className="relative rounded-xl pl-3 pr-1.5 transition-colors duration-150 hover:bg-black/[0.03] dark:hover:bg-white/[0.05]">
         <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-brand-600/15 transition-colors duration-150 group-hover:bg-brand-600/28 dark:bg-brand-400/18 dark:group-hover:bg-brand-400/32" />
-      {/* Resume-like header: company/location (left), dates (right), then job title */}
-      <div className="flex items-baseline justify-between gap-3">
+      {/* Resume-style header: company + dates on one line, title, then location */}
+      <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-            <InlineInput
-              value={entry.company || ""}
-              onChange={(v) => upd("company", v)}
-              placeholder="Company"
-              className="min-w-[14ch] font-semibold text-gray-900 dark:text-gray-100 text-sm"
-            />
-            {entry.location !== undefined ? (
-              <>
-                <span className="text-gray-300 dark:text-gray-600 text-xs">•</span>
-                <InlineInput
-                  value={entry.location || ""}
-                  onChange={(v) => upd("location", v)}
-                  placeholder="Location"
-                  className="min-w-[12ch] text-gray-500 dark:text-gray-400 text-xs"
-                />
-              </>
-            ) : null}
-          </div>
+          <InlineInput
+            value={entry.company || ""}
+            onChange={(v) => upd("company", v)}
+            placeholder="Company"
+            className="min-w-[14ch] font-semibold text-gray-900 dark:text-gray-100 text-sm"
+          />
           <div className="mt-0.5">
             <InlineInput
               value={entry.title || ""}
               onChange={(v) => upd("title", v)}
               placeholder="Job Title"
-              className="w-full text-sm font-medium text-gray-700 dark:text-gray-300"
+              className="w-full text-sm font-medium text-gray-800 dark:text-gray-200"
             />
           </div>
+          {entry.location !== undefined ? (
+            <div className="mt-0.5">
+              <InlineInput
+                value={entry.location || ""}
+                onChange={(v) => upd("location", v)}
+                placeholder="City, State or Remote"
+                className="w-full text-xs text-gray-500 dark:text-gray-400"
+              />
+            </div>
+          ) : null}
         </div>
 
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+        <div className="flex shrink-0 flex-col items-end gap-1.5 pt-0.5">
+          <div className="flex items-center gap-1.5 text-sm tabular-nums text-gray-600 dark:text-gray-400">
             <InlineInput
               value={entry.startDate || ""}
               onChange={(v) => upd("startDate", v)}
               placeholder="Start"
-              className="text-gray-500 dark:text-gray-400 text-xs"
+              className="min-w-[7ch] text-right text-sm text-gray-600 dark:text-gray-400"
             />
-            <span className="text-gray-300 dark:text-gray-600 text-xs">–</span>
+            <span className="text-gray-400 dark:text-gray-500">—</span>
             <InlineInput
               value={entry.endDate || ""}
               onChange={(v) => upd("endDate", v)}
-              placeholder="End / Present"
-              className="text-gray-500 dark:text-gray-400 text-xs"
+              placeholder="Present"
+              className="min-w-[7ch] text-right text-sm text-gray-600 dark:text-gray-400"
             />
           </div>
           <RemoveBtn onClick={onRemove} />

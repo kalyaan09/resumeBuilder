@@ -77,13 +77,16 @@ class GeminiCacheManager:
         ):
             return self._cache_name
 
-        import google.generativeai as genai
+        from google import genai as new_genai
+        from google.genai import types
 
-        genai.configure(api_key=api_key)
-        cache = genai.caching.CachedContent.create(
+        client = new_genai.Client(api_key=api_key)
+        cache = client.caches.create(
             model=model,
-            system_instruction=static_prompt,
-            ttl=f"{self._cache_ttl}s",
+            config=types.CreateCachedContentConfig(
+                system_instruction=static_prompt,
+                ttl=f"{self._cache_ttl}s",
+            ),
         )
         self._cache_name = cache.name
         self._cache_created_at = time.time()
@@ -231,7 +234,7 @@ class LLMClient:
                     time.sleep(sleep_s)
                     continue
                 if _is_gemini_transient_error(e):
-                    sleep_s = min(2.0 * (1.5**attempt), 30.0)
+                    sleep_s = min(3.0 * (1.6**attempt), 60.0)
                     log.warning(
                         "[gemini] transient error (attempt %d/%d): %s — retry in %.1fs",
                         attempt + 1,
@@ -349,14 +352,19 @@ class LLMClient:
 
         try:
             cache_name = self.cache_manager.get_or_create_cache(static_prompt, self.model, self.api_key)
-            import google.generativeai as genai
+            from google import genai as new_genai
+            from google.genai import types
 
-            model = genai.GenerativeModel.from_cached_content(cached_content=cache_name)
-            response = model.generate_content(
-                dynamic_prompt,
-                generation_config=genai.GenerationConfig(max_output_tokens=max_tokens),
+            client = new_genai.Client(api_key=self.api_key)
+            response = client.models.generate_content(
+                model=self._gemini_model_id(),
+                contents=dynamic_prompt,
+                config=types.GenerateContentConfig(
+                    cached_content=cache_name,
+                    max_output_tokens=max_tokens,
+                ),
             )
-            text = getattr(response, "text", None) or ""
+            text = _genai_response_text(response)
             if text.strip():
                 return text
             raise RuntimeError("Empty text from cached Gemini model")

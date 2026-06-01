@@ -398,6 +398,7 @@ export default function Settings() {
   async function saveResume() {
     if (!editedResume) return;
     setResumeSaving(true);
+    setSyncError(null);
     try {
       if (activeProfileId && profiles.length > 0) {
         await Promise.all([
@@ -410,6 +411,8 @@ export default function Settings() {
       setMasterResume(editedResume);
       setResumeDirty(false);
       setSuggestions(null);
+    } catch (e: unknown) {
+      setSyncError(e instanceof Error ? e.message : "Save failed");
     } finally {
       setResumeSaving(false);
     }
@@ -608,16 +611,16 @@ export default function Settings() {
                     type="button"
                     variant="secondary"
                     size="sm"
-                    onClick={handleSyncAndSave}
-                    disabled={!resumeDirty || syncing || resumeSaving}
+                    onClick={() => void saveResume()}
+                    disabled={!resumeDirty || resumeSaving}
                     className="shrink-0"
-                    title={!resumeDirty ? "Make a change to review again" : undefined}
+                    title={!resumeDirty ? "Make a change to save" : undefined}
                   >
-                    <Sparkles data-icon="inline-start" />
-                    {syncing ? "Checking…" : resumeSaving ? "Saving…" : "Review"}
+                    <Save data-icon="inline-start" />
+                    {resumeSaving ? "Saving…" : "Save"}
                   </Button>
                 ) : null}
-                {activeNav !== "danger" ? (
+                {activeNav !== "danger" && activeNav !== "resume" ? (
                   <Button
                     type="button"
                     variant="secondary"
@@ -748,105 +751,6 @@ export default function Settings() {
                 <div className="mx-auto max-w-3xl space-y-4">
                   {resumeEditorSections ? (
                     <>
-                      {!dismissedReviewBanner && syncError ? (
-                        (() => {
-                          const fe = formatAiError(syncError);
-                          return (
-                        <Surface
-                          variant="inset"
-                          className="sticky top-0 z-10 -mx-2 mb-2 rounded-xl border border-red-200/80 bg-red-50/80 p-3 shadow-sm backdrop-blur-sm dark:border-red-800/60 dark:bg-red-950/35"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="text-sm font-semibold text-red-900 dark:text-red-100">{fe.title}</div>
-                              <p className="mt-0.5 text-xs text-red-800/90 dark:text-red-200/90">{fe.message}</p>
-                              <div className="mt-2 flex items-center gap-2">
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  size="sm"
-                                  className="h-8 px-3"
-                                  onClick={handleSyncAndSave}
-                                  disabled={syncing || resumeSaving}
-                                >
-                                  Try again
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 px-2 text-xs text-red-800 hover:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/15"
-                                  onClick={() => setShowReviewErrorDetails((v) => !v)}
-                                >
-                                  {showReviewErrorDetails ? "Hide details" : "Details"}
-                                </Button>
-                              </div>
-                              {showReviewErrorDetails ? (
-                                <pre className="mt-2 overflow-auto rounded-lg bg-white/60 p-2 text-[11px] text-red-900/90 dark:bg-black/20 dark:text-red-100">
-                                  {fe.raw}
-                                </pre>
-                              ) : null}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {typeof fe.code === "number" ? (
-                                <span className="shrink-0 rounded-full bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-800 dark:bg-red-500/15 dark:text-red-200">
-                                  {fe.code}
-                                </span>
-                              ) : null}
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 rounded-lg text-red-700 hover:bg-red-500/10 hover:text-red-900 dark:text-red-200 dark:hover:bg-red-500/15"
-                                onClick={() => setDismissedReviewBanner(true)}
-                                aria-label="Dismiss"
-                                title="Dismiss"
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </div>
-                        </Surface>
-                          );
-                        })()
-                      ) : !dismissedReviewBanner && suggestions !== null ? (
-                        <Surface
-                          variant="inset"
-                          className="sticky top-0 z-10 -mx-2 mb-2 rounded-xl border border-white/40 bg-white/70 p-3 shadow-sm backdrop-blur-sm dark:border-white/10 dark:bg-white/[0.06]"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">
-                                Review
-                                {suggestions.length > 0
-                                  ? ` · ${suggestions.length} note${suggestions.length !== 1 ? "s" : ""}`
-                                  : " · All clear"}
-                              </div>
-                              <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">
-                                {suggestions.length > 0
-                                  ? "Notes are shown inline inside each section so you can fix them in place."
-                                  : "No issues found. You can save now."}
-                              </p>
-                            </div>
-                            {suggestions.length === 0 ? (
-                              <span className="shrink-0 rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                                Saved
-                              </span>
-                            ) : null}
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 rounded-lg text-gray-500 hover:bg-black/[0.06] hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
-                              onClick={() => setDismissedReviewBanner(true)}
-                              aria-label="Dismiss"
-                              title="Dismiss"
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </Surface>
-                      ) : null}
                       <ResumeEditor
                         sections={resumeEditorSections}
                         originalSections={resumeEditorOriginal}
@@ -854,10 +758,9 @@ export default function Settings() {
                         onReaskSection={handleReaskSection}
                         onResetSection={handleResetSection}
                         label={splitResumeSources ? "Basics & education" : "Sections"}
-                        showReask={true}
-                        suggestions={suggestions}
+                        showReask={false}
+                        suggestions={null}
                       />
-                      {/* syncError is shown in the sticky banner above */}
                     </>
                   ) : (
                     <p className="py-8 text-center text-sm text-gray-400 dark:text-gray-500">No resume on file yet. Complete setup first.</p>

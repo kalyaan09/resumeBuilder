@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type PointerEvent as ReactPointerEvent } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, type Dispatch, type SetStateAction, type PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Eraser, Save, Sparkles } from "lucide-react";
@@ -6,7 +6,11 @@ import ResumeEditor from "../components/ResumeEditor";
 import AppSidebar from "../components/AppSidebar";
 import { getApiKey } from "../lib/secureStore";
 import { readConfig, readShared, readProfileResume, writeConfig } from "../lib/persistenceStore";
-import { getEffectiveActiveSections, getEffectiveSectionOrder } from "../lib/sectionOrder";
+import {
+  filterTailoredSectionsForEditor,
+  getEffectiveActiveSectionsWithData,
+  getEffectiveSectionOrder,
+} from "../lib/sectionOrder";
 import { Button, Modal, SegmentedControl, Surface, TypographyH2, TypographyMuted } from "../ui";
 import { formatAiError } from "../ui/errorFormat";
 import { cn } from "../ui/cn";
@@ -15,7 +19,7 @@ import { getProfiles, type TransformersContext } from "../lib/sidecarApi";
 import { detectBestProfile, detectCompanyType, detectSeniority, extractKeywords, weakBulletIndicesFromResume } from "../lib/jdAnalysis";
 import { readErrorDetailFromResponse } from "../lib/httpError";
 import { autoFitOnExportEnabled } from "../lib/exportPrefs";
-import { buildEditorSession, readEditorSession, writeEditorSession } from "../lib/editorSessionStorage";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 
 const SIDECAR = "http://localhost:8000";
 const FONT_SIZES = [9, 9.5, 10, 10.5, 11];
@@ -30,57 +34,46 @@ const PREVIEW_MIN_W = 360;
 const PREVIEW_MAX_W = 580;
 const EDITOR_MIN_W = 520;
 
-function filterSections(
-  resume: Record<string, unknown>,
-  sectionOrder: string[],
-  activeSections: string[]
-): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const key of sectionOrder) {
-    if (key !== "basics" && activeSections.includes(key) && resume[key] !== undefined) {
-      result[key] = resume[key];
-    }
-  }
-  return result;
-}
+type EditorGaps = {
+  missing_skills?: string[];
+  removed_unsupported_skills?: string[];
+  added_supported_skills?: string[];
+};
 
-export default function Editor() {
+type EditorProps = {
+  jdText: string;
+  setJdText: Dispatch<SetStateAction<string>>;
+  editedResume: Record<string, unknown> | null;
+  setEditedResume: Dispatch<SetStateAction<Record<string, unknown> | null>>;
+  gaps: EditorGaps | null;
+  setGaps: Dispatch<SetStateAction<EditorGaps | null>>;
+  transformersContext: TransformersContext;
+  setTransformersContext: Dispatch<SetStateAction<TransformersContext>>;
+};
+
+export default function Editor({
+  jdText,
+  setJdText,
+  editedResume,
+  setEditedResume,
+  gaps,
+  setGaps,
+  transformersContext,
+  setTransformersContext,
+}: EditorProps) {
   const navigate = useNavigate();
   const { profiles, activeProfileId, activeProfileName, switchTo } = useProfiles();
-  /** Keeps latest editor fields for session persist (incl. on unmount / profile switch). */
-  const persistRef = useRef({
-    jdText: "",
-    editedResume: null as Record<string, unknown> | null,
-    transformersContext: {} as TransformersContext,
-    gaps: null as {
-      missing_skills?: string[];
-      removed_unsupported_skills?: string[];
-      added_supported_skills?: string[];
-    } | null,
-    fontSize: 10,
-    fontSizeManual: false,
-    lastExportPath: null as string | null,
-    activeProfileId: null as string | null,
-  });
 
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [sharedData, setSharedData] = useState<Record<string, unknown> | null>(null);
   const [profileResume, setProfileResume] = useState<Record<string, unknown> | null>(null);
   const [masterSections, setMasterSections] = useState<Record<string, unknown> | null>(null);
   const [editedSections, setEditedSections] = useState<Record<string, unknown> | null>(null);
-  const [editedResume, setEditedResume] = useState<Record<string, unknown> | null>(null);
 
-  const [jdText, setJdText] = useState("");
   const [profileToast, setProfileToast] = useState<string | null>(null);
-  const [transformersContext, setTransformersContext] = useState<TransformersContext>({});
   const [jdAiLoading, setJdAiLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [gaps, setGaps] = useState<{
-    missing_skills?: string[];
-    removed_unsupported_skills?: string[];
-    added_supported_skills?: string[];
-  } | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
   const [lastExportPath, setLastExportPath] = useState<string | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
@@ -107,95 +100,24 @@ export default function Editor() {
   const isResizingRef = useRef(false);
   const editorLayoutRef = useRef<HTMLDivElement>(null);
 
-  persistRef.current = {
-    jdText,
-    editedResume,
-    transformersContext,
-    gaps,
-    fontSize,
-    fontSizeManual,
-    lastExportPath,
-    activeProfileId,
-  };
-
   // Stable refs so auto-detect can read current values without being in its dep array.
+  // Updated in the render body so they are never stale in timers or async callbacks.
   const activeProfileIdRef = useRef<string | null>(activeProfileId);
-  useEffect(() => { activeProfileIdRef.current = activeProfileId; }, [activeProfileId]);
+  activeProfileIdRef.current = activeProfileId;
   const profileResumeRef = useRef(profileResume);
-  useEffect(() => { profileResumeRef.current = profileResume; }, [profileResume]);
+  profileResumeRef.current = profileResume;
+  const editedResumeRef = useRef(editedResume);
+  editedResumeRef.current = editedResume;
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
   const switchToRef = useRef(switchTo);
-  useEffect(() => { switchToRef.current = switchTo; }, [switchTo]);
+  switchToRef.current = switchTo;
   // userOverrideRef: set true when user manually picks a profile; cleared when JD changes substantially.
   const userOverrideRef = useRef(false);
   const overrideJdSnapshotRef = useRef("");
-  const sessionRestoredRef = useRef(false);
-  const sessionReadyForPersistRef = useRef(false);
+  const prevActiveProfileIdRef = useRef<string | null>(null);
+  const loadProfileRequestRef = useRef(0);
 
-  function flushEditorSessionToStorage() {
-    const p = persistRef.current;
-    writeEditorSession(
-      buildEditorSession({
-        profileId: p.activeProfileId ?? null,
-        jdText: p.jdText,
-        editedResume: p.editedResume,
-        transformersContext: p.transformersContext,
-        gaps: p.gaps,
-        fontSize: p.fontSize,
-        fontSizeManual: p.fontSizeManual,
-        lastExportPath: p.lastExportPath,
-      }),
-    );
-  }
-
-  /** Restore JD + tailored resume when returning from History/Settings (same browser session). */
-  useLayoutEffect(() => {
-    if (dataLoading) return;
-    if (profiles.length > 0 && activeProfileId == null) return;
-    if (sessionRestoredRef.current) return;
-    sessionRestoredRef.current = true;
-
-    const pid = activeProfileId ?? null;
-    const s = readEditorSession();
-    if (!s) {
-      sessionReadyForPersistRef.current = true;
-      return;
-    }
-
-    if (s.jdText) setJdText(s.jdText);
-
-    if (s.profileId != null && pid != null && s.profileId !== pid) {
-      sessionReadyForPersistRef.current = true;
-      return;
-    }
-
-    if (s.editedResume) setEditedResume(s.editedResume);
-    setTransformersContext(s.transformersContext ?? {});
-    setGaps(s.gaps ?? null);
-    if (typeof s.fontSize === "number" && Number.isFinite(s.fontSize)) setFontSize(s.fontSize);
-    setFontSizeManual(!!s.fontSizeManual);
-    if (s.lastExportPath) setLastExportPath(s.lastExportPath);
-    sessionReadyForPersistRef.current = true;
-  }, [dataLoading, activeProfileId, profiles.length]);
-
-  /** Persist draft on change; flush on unmount (e.g. navigate away) so tab switch does not lose data. */
-  useEffect(() => {
-    if (dataLoading || !sessionReadyForPersistRef.current) return;
-    const t = window.setTimeout(flushEditorSessionToStorage, 300);
-    return () => {
-      window.clearTimeout(t);
-      flushEditorSessionToStorage();
-    };
-  }, [
-    dataLoading,
-    jdText,
-    editedResume,
-    transformersContext,
-    gaps,
-    fontSize,
-    fontSizeManual,
-    lastExportPath,
-    activeProfileId,
-  ]);
 
   useEffect(() => {
     if (!autoFitFontPulse) return;
@@ -249,7 +171,7 @@ export default function Editor() {
 
   const startResize = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
     // Only start on primary button / touch.
-    if ((e as unknown as { button?: number }).button === 2) return;
+    if (e.button === 2) return;
     const container = (e.currentTarget.parentElement as HTMLDivElement | null);
     const previewEl = container?.querySelector("[data-preview-panel]") as HTMLDivElement | null;
     if (!container || !previewEl) return;
@@ -353,9 +275,7 @@ export default function Editor() {
         setProfileResume(profile);
 
         if (cfg && profile) {
-          const order = getEffectiveSectionOrder(cfg, profile);
-          const active = getEffectiveActiveSections(cfg, profile);
-          setMasterSections(filterSections(profile, order, active));
+          setMasterSections(filterTailoredSectionsForEditor(profile, cfg));
         }
       } finally {
         setDataLoading(false);
@@ -367,19 +287,30 @@ export default function Editor() {
   // reload profile data so profileResume stays in sync and the editor shows the correct content.
   const didMountRef = useRef(false);
   useEffect(() => {
-    if (!didMountRef.current) {
+    if (!activeProfileId) return;
+
+    const prev = prevActiveProfileIdRef.current;
+    prevActiveProfileIdRef.current = activeProfileId;
+
+    const isInitialBind = !didMountRef.current;
+    if (isInitialBind) {
       didMountRef.current = true;
+      // Never wipe draft on first bind — session restore handles returning from Settings/History.
+      void loadProfileData(activeProfileId, { resetTailoredDraft: false });
       return;
     }
-    if (!activeProfileId) return;
-    loadProfileData(activeProfileId);
+
+    if (prev === activeProfileId) return;
+    // If a tailored draft is active, don't wipe it on an automatic profile change.
+    // The user's profile dropdown fires loadProfileData(next, resetTailoredDraft:true) directly
+    // and is the intended way to switch profiles when a draft exists.
+    const hasDraft = editedResumeRef.current != null;
+    void loadProfileData(activeProfileId, { resetTailoredDraft: !hasDraft });
   }, [activeProfileId]);
 
   useEffect(() => {
     if (!editedResume || !config) return;
-    const order = getEffectiveSectionOrder(config, editedResume);
-    const active = getEffectiveActiveSections(config, editedResume);
-    setEditedSections(filterSections(editedResume, order, active));
+    setEditedSections(filterTailoredSectionsForEditor(editedResume, config));
   }, [editedResume, config]);
 
   useEffect(() => {
@@ -396,7 +327,7 @@ export default function Editor() {
             resume: editedResume,
             template: (config.template as string) || "jake",
             section_order: getEffectiveSectionOrder(config, editedResume),
-            active_sections: getEffectiveActiveSections(config, editedResume),
+            active_sections: getEffectiveActiveSectionsWithData(config, editedResume),
             font_size: fontSize,
           }),
         });
@@ -437,30 +368,43 @@ export default function Editor() {
     };
   }, [editedResume, fontSize, config]);
 
-  async function loadProfileData(profileId: string) {
+  async function loadProfileData(profileId: string, options?: { resetTailoredDraft?: boolean }) {
+    const requestId = ++loadProfileRequestRef.current;
+    const resetTailoredDraft = options?.resetTailoredDraft ?? false;
     const [shared, profile] = await Promise.all([readShared(), readProfileResume(profileId)]);
+
+    // Stale response — a newer load or tailor finished while we were fetching.
+    if (requestId !== loadProfileRequestRef.current) return;
+
     setSharedData(shared);
     setProfileResume(profile);
+
+    if (resetTailoredDraft) {
+      setEditedResume(null);
+      setEditedSections(null);
+      setGaps(null);
+      setTransformersContext({});
+    }
+
+    if (config && profile) {
+      setMasterSections(filterTailoredSectionsForEditor(profile, config));
+    }
+  }
+
+  function handleJdChange(next: string) {
+    setJdText(next);
+  }
+
+  function handleClearDraft() {
+    setJdText("");
     setEditedResume(null);
     setEditedSections(null);
-    const cur = persistRef.current;
-    writeEditorSession(
-      buildEditorSession({
-        profileId,
-        jdText: cur.jdText,
-        editedResume: null,
-        transformersContext: {},
-        gaps: null,
-        fontSize: cur.fontSize,
-        fontSizeManual: cur.fontSizeManual,
-        lastExportPath: cur.lastExportPath,
-      }),
-    );
-    if (config && profile) {
-      const order = getEffectiveSectionOrder(config, profile);
-      const active = getEffectiveActiveSections(config, profile);
-      setMasterSections(filterSections(profile, order, active));
-    }
+    setGaps(null);
+    setTransformersContext({});
+    setError(null);
+    setOverflowWarning(null);
+    userOverrideRef.current = false;
+    overrideJdSnapshotRef.current = "";
   }
 
   async function fullLlmConfig() {
@@ -504,29 +448,38 @@ export default function Editor() {
         body: JSON.stringify(editPayload),
       };
 
-      let res: Response;
+      // Submit job and get job_id immediately (avoids WKWebView 60s timeout)
+      const submitRes = await fetch(`${SIDECAR}/edit-resume`, editInit);
+      if (!submitRes.ok) throw new Error(await readErrorDetailFromResponse(submitRes));
+      const { job_id } = await submitRes.json();
+
+      // Poll until done (3s interval, 10 minute max)
+      const POLL_INTERVAL = 3000;
+      const deadline = Date.now() + 10 * 60 * 1000;
+      let data: Record<string, unknown>;
+      while (true) {
+        if (Date.now() > deadline) throw new Error("Tailoring timed out after 10 minutes");
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+        const pollRes = await fetch(`${SIDECAR}/edit-resume/poll/${job_id}`);
+        if (!pollRes.ok) throw new Error(await readErrorDetailFromResponse(pollRes));
+        const job = await pollRes.json();
+        if (job.status === "error") throw new Error(job.message ?? "Tailoring failed");
+        if (job.status === "done") { data = job; break; }
+      }
+
+      // Bump so any in-flight loadProfileData cannot wipe this draft when it completes.
+      loadProfileRequestRef.current += 1;
+      const merged = { ...(freshShared ?? {}), ...(data.resume as Record<string, unknown>) };
+      setEditedResume(merged);
+      if (data && typeof data === "object" && data.gaps) setGaps(data.gaps as EditorGaps);
       try {
-        res = await fetch(`${SIDECAR}/edit-resume`, editInit);
-      } catch (first) {
-        const msg = first instanceof Error ? first.message.toLowerCase() : "";
-        const transient =
-          msg.includes("load failed") || msg.includes("failed to fetch") || msg.includes("network");
-        if (transient) {
-          await new Promise((r) => setTimeout(r, 2500));
-          res = await fetch(`${SIDECAR}/edit-resume`, editInit);
-        } else {
-          throw first;
+        let granted = await isPermissionGranted();
+        if (!granted) {
+          const perm = await requestPermission();
+          granted = perm === "granted";
         }
-      }
-
-      if (!res.ok) {
-        throw new Error(await readErrorDetailFromResponse(res));
-      }
-
-      const data = await res.json();
-      // freshShared has basics + education; data.resume has LLM-tailored profile sections
-      setEditedResume({ ...(freshShared ?? {}), ...data.resume });
-      if (data && typeof data === "object" && data.gaps) setGaps(data.gaps);
+        if (granted) sendNotification({ title: "Resume tailored", body: "Your resume is ready to review." });
+      } catch { /* notification not supported */ }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to edit resume");
     } finally {
@@ -580,7 +533,7 @@ export default function Editor() {
           resume: editedResume,
           template: (config?.template as string) || "jake",
           section_order: getEffectiveSectionOrder(config, editedResume),
-          active_sections: getEffectiveActiveSections(config, editedResume),
+          active_sections: getEffectiveActiveSectionsWithData(config, editedResume),
           save_path: (config?.savePath as string) || "~/Documents/Resumes",
           font_size: sizeToUse,
           auto_fit: exportUsesAutoFit,
@@ -700,9 +653,16 @@ export default function Editor() {
         });
 
         // Skip auto-switch if the user has manually chosen a profile for this JD.
-        if (!userOverrideRef.current && match?.id && match.id !== activeProfileIdRef.current) {
+        // Also skip when a tailored draft exists — switching would wipe it.
+        if (
+          !userOverrideRef.current &&
+          !editedResumeRef.current &&
+          !loadingRef.current &&
+          match?.id &&
+          match.id !== activeProfileIdRef.current
+        ) {
           await switchToRef.current(match.id);
-          await loadProfileData(match.id);
+          await loadProfileData(match.id, { resetTailoredDraft: true });
           showProfileToast(`Switching to ${match.name} profile`);
         }
       } catch {
@@ -773,7 +733,7 @@ export default function Editor() {
                               overrideJdSnapshotRef.current = jdText;
                               try {
                                 await switchTo(next);
-                                await loadProfileData(next);
+                                await loadProfileData(next, { resetTailoredDraft: true });
                               } catch {
                                 // non-fatal
                               }
@@ -814,16 +774,16 @@ export default function Editor() {
                   Paste the posting. We will match your resume to what they are looking for.
                 </TypographyMuted>
                 <Surface variant="inset" className="relative mt-4 rounded-xl px-4 py-3">
-                  {jdText.trim().length > 0 && (
+                  {(jdText.trim().length > 0 || editedResume) && (
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
                       className="absolute right-2 top-2 h-8 w-8 rounded-lg text-gray-500 hover:bg-black/[0.06] hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.08] dark:hover:text-gray-200"
-                      aria-label="Clear job description"
-                      title="Clear"
+                      aria-label="Clear job description and tailored draft"
+                      title="Clear JD and tailored draft"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setJdText("")}
+                      onClick={handleClearDraft}
                     >
                       <Eraser />
                     </Button>
@@ -832,7 +792,7 @@ export default function Editor() {
                     rows={9}
                     placeholder="Paste the full job description here…"
                     value={jdText}
-                    onChange={(e) => setJdText(e.target.value)}
+                    onChange={(e) => handleJdChange(e.target.value)}
                     className="w-full resize-none bg-transparent pr-10 text-sm leading-relaxed text-gray-900 placeholder:text-gray-400 focus:outline-none dark:text-gray-100 dark:placeholder:text-gray-500"
                   />
                 </Surface>
@@ -859,9 +819,8 @@ export default function Editor() {
                   <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
                   <TypographyMuted className="mt-4">Shaping your experience to fit this role…</TypographyMuted>
                   <TypographyMuted className="mt-2 max-w-sm text-center text-xs leading-snug">
-                    Slow models (for example Gemma) can take many minutes and many API calls. Keep this window open and
-                    awake until it finishes—closing or sleeping can show “Load failed” even though the server is still
-                    working.
+                    Slower models can take several minutes and many API calls. Keep this window open and awake until it
+                    finishes—closing or sleeping can show “Load failed” even though the server is still working.
                   </TypographyMuted>
                 </div>
               )}

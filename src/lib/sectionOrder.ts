@@ -134,3 +134,49 @@ export function getEffectiveActiveSections(
   }
   return order;
 }
+
+const _CORE_SET = new Set<string>(CORE_SECTION_KEYS);
+
+/**
+ * Editor (and similar UIs): only include optional sections that have content.
+ * Core sections stay visible even when empty so the user can fill them.
+ * Pipeline output often includes empty arrays for unused sections — omit those.
+ */
+export function filterResumeSectionsForEditor(
+  resume: Record<string, unknown>,
+  sectionOrder: string[],
+  activeSections: string[]
+): Record<string, unknown> {
+  const active = new Set(activeSections);
+  const result: Record<string, unknown> = {};
+  for (const key of sectionOrder) {
+    if (key === "basics" || !active.has(key)) continue;
+    const val = resume[key];
+    if (val === undefined) continue;
+    if (!_CORE_SET.has(key) && !sectionHasData(val)) continue;
+    result[key] = val;
+  }
+  return result;
+}
+
+/** active_sections for PDF/preview: core + optional sections that actually have data. */
+export function getEffectiveActiveSectionsWithData(
+  config: Record<string, unknown> | null | undefined,
+  mergedResume: Record<string, unknown> | null | undefined
+): string[] {
+  const configured = getEffectiveActiveSections(config, mergedResume);
+  const withData = new Set(computeSectionsWithData(mergedResume));
+  return configured.filter((k) => withData.has(k));
+}
+
+/** Editor tailor view: profile sections only (basics/education live under Settings → Basic Info). */
+export function filterTailoredSectionsForEditor(
+  resume: Record<string, unknown>,
+  config: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const order = getEffectiveSectionOrder(config, resume);
+  const active = getEffectiveActiveSections(config, resume);
+  const filtered = filterResumeSectionsForEditor(resume, order, active);
+  delete filtered.education;
+  return filtered;
+}

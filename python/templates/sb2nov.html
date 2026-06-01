@@ -13,11 +13,17 @@
   body {
     font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
     font-size: 10pt;
-    color: #000;
-    line-height: 1.25;
+    color: #111;
+    line-height: 1.38;
     zoom: {{ meta.fontSize / 10.0 }};
     padding: 0;
     background: #fff;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  p, .resume-body, .highlights li, .tech-row, .one-col, .cert-row, .pub-entry {
+    text-align: justify;
   }
 
   a { color: #000; text-decoration: underline; }
@@ -108,8 +114,8 @@
   }
 
   .highlights li {
-    font-size: 9.5pt;
-    line-height: 1.3;
+    font-size: 10pt;
+    line-height: 1.38;
     margin-bottom: 3pt;
     position: relative;
     break-inside: avoid;
@@ -152,7 +158,7 @@
 
   /* ── SKILLS / TECHNOLOGIES ──────────────── */
   .tech-row {
-    font-size: 9.5pt;
+    font-size: 10pt;
     margin-bottom: 4pt;
     padding-left: 2pt;
   }
@@ -196,7 +202,7 @@
   {% if section_name == 'summary' and resume.summary %}
   <div class="section">
     <div class="section-title">Summary</div>
-    <div class="one-col" style="font-size:9.5pt; line-height:1.4;">{{ resume.summary }}</div>
+    <div class="one-col resume-body" style="font-size:10pt; line-height:1.38;">{{ resume.summary }}</div>
   </div>
 
   {# ── EDUCATION ── #}

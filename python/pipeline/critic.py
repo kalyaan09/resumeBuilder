@@ -12,32 +12,32 @@ import re
 from typing import Optional
 
 from .deterministic_validator import _collect_bullets, run_deterministic_checks
+from .utils import robust_parse, invoke_llm_with_retry
 
 log = logging.getLogger("resume")
 
 MAX_LLM_ITERATIONS = 3
 
-_CRITIC_SYSTEM = """You are a resume quality critic. Review the rewritten resume bullets and summary for specific violations.
+_CRITIC_SYSTEM = """You are a resume quality critic. The deterministic validator has already checked banned words, metric preservation, and weak endings.
 
-Run all three passes and report every violation found:
-
-1. BANNED_WORD — any of: leverage, leveraging, delve, robust, seamless, utilize, utilise, harness, foster, streamline, pivotal, spearhead, synergy, transformative, meticulous, garner, embark, cutting-edge
-2. FAITHFULNESS — did the rewrite lose technical details, specific metrics, or proper nouns that were in the original?
-3. WEAK_ENDING — bullets that trail off without a result, impact, or outcome statement
+Your job: assess whether the rewritten bullets and summary need another refinement pass based on overall quality — coherence, tone, JD alignment, and professional strength.
 
 Return ONLY valid JSON (no commentary, no code fences):
-{
-  "violations": [
-    {
-      "rule": "BANNED_WORD|FAITHFULNESS|WEAK_ENDING",
-      "bullet_id": "exp0.b2",
-      "span": "the exact offending text",
-      "fix": "specific actionable fix — not 'improve this'"
-    }
-  ],
-  "missing_keywords": ["keyword not surfaced anywhere"],
-  "overall_pass": true
-}"""
+{"requires_refinement": true, "reason": "one sentence why"}"""
+
+
+_CRITIC_RETRY_PROMPT = """Your previous response failed JSON validation.
+
+ORIGINAL INSTRUCTIONS:
+{original_instructions}
+
+YOUR PREVIOUS OUTPUT:
+{raw_content}
+
+VALIDATION ERROR:
+{validation_error}
+
+Return only valid JSON: {{"requires_refinement": true|false, "reason": "one sentence"}}. No markdown fences."""
 
 _REVISE_SYSTEM = """You are a resume editor fixing specific violations in resume bullets.
 
@@ -51,47 +51,6 @@ Return ONLY a valid JSON array:
 [{"id": "exp0.b2", "text": "fixed bullet text"}, ...]"""
 
 
-def _strip_trailing_commas(s: str) -> str:
-    return re.sub(r",(\s*[}\]])", r"\1", s)
-
-
-def _extract_json(raw: str) -> dict:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-        if "```" in raw:
-            raw = raw.rsplit("```", 1)[0]
-        raw = raw.strip()
-    if not raw.startswith("{"):
-        idx = raw.find("{")
-        if idx == -1:
-            raise ValueError("No JSON object found")
-        raw = raw[idx:]
-    if not raw.endswith("}"):
-        idx = raw.rfind("}")
-        if idx == -1:
-            raise ValueError("No closing } found")
-        raw = raw[:idx + 1]
-    return json.loads(_strip_trailing_commas(raw))
-
-
-def _extract_json_array(raw: str) -> list:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-        if "```" in raw:
-            raw = raw.rsplit("```", 1)[0]
-        raw = raw.strip()
-    idx = raw.find("[")
-    if idx == -1:
-        raise ValueError("No JSON array found")
-    raw = raw[idx:]
-    ridx = raw.rfind("]")
-    if ridx == -1:
-        raise ValueError("No closing ] found")
-    return json.loads(_strip_trailing_commas(raw[:ridx + 1]))
-
-
 def _run_llm_critic(
     resume: dict,
     original_resume: dict,
@@ -101,25 +60,40 @@ def _run_llm_critic(
     llm,
 ) -> dict:
     bullets = _collect_bullets(resume)
-    original_bullets = _collect_bullets(original_resume)
     allowed_entities = entity_manifest.get("all_entities", [])[:30]
 
     dynamic = (
         f"Required keywords (check if surfaced): {', '.join(required_keywords)}\n"
         f"Allowed entities: {', '.join(str(e) for e in allowed_entities)}\n\n"
         f"Voice samples (reference for tone):\n{voice_anchor}\n\n"
-        f"Original bullets:\n{json.dumps(original_bullets, indent=2)}\n\n"
         f"Rewritten bullets:\n{json.dumps(bullets, indent=2)}\n\n"
         f"Summary:\n{resume.get('summary', '')}\n\n"
-        "Identify all violations across all three passes. Return JSON."
+        "Does this resume need another refinement pass? Return JSON."
     )
 
+    raw = None
     try:
-        raw = llm.complete(_CRITIC_SYSTEM, dynamic, max_tokens=4096)
-        return _extract_json(raw)
+        raw = invoke_llm_with_retry(llm.complete, _CRITIC_SYSTEM, dynamic, max_tokens=256)
+        result = robust_parse(raw)
+        log.info("[critic] LLM critic: requires_refinement=%s reason=%s",
+                 result.get("requires_refinement"), result.get("reason", ""))
+        return result
     except Exception as e:
-        log.warning("[critic] LLM critic call failed (%s) — treating as pass", e)
-        return {"violations": [], "missing_keywords": [], "overall_pass": True}
+        log.warning("[critic] LLM critic parse failed (%s) — retrying with error context", e)
+        try:
+            retry_dynamic = _CRITIC_RETRY_PROMPT.format(
+                original_instructions=dynamic[:500],
+                raw_content=raw or "",
+                validation_error=str(e),
+            )
+            raw = invoke_llm_with_retry(llm.complete, _CRITIC_SYSTEM, retry_dynamic, max_tokens=256)
+            result = robust_parse(raw)
+            log.info("[critic] LLM critic retry succeeded: requires_refinement=%s reason=%s",
+                     result.get("requires_refinement"), result.get("reason", ""))
+            return result
+        except Exception as e2:
+            log.warning("[critic] LLM critic retry also failed (%s) — treating as pass", e2)
+            return {"requires_refinement": False, "reason": "parse failed after retry — treating as pass"}
 
 
 def _revise_violations(
@@ -136,7 +110,7 @@ def _revise_violations(
     by_bullet: dict[str, list[dict]] = {}
     for v in violations:
         bid = v.get("bullet_id")
-        if bid and bid != "summary" and re.match(r"exp\d+\.b\d+", bid):
+        if bid and bid != "summary" and re.match(r"(exp|proj)\d+\.b\d+", bid):
             by_bullet.setdefault(bid, []).append(v)
 
     if not by_bullet:
@@ -148,14 +122,14 @@ def _revise_violations(
     # Build revision request
     items = []
     for bid, vios in by_bullet.items():
-        m = re.match(r"exp(\d+)\.b(\d+)", bid)
+        m = re.match(r"(exp|proj)(\d+)\.b(\d+)", bid)
         if not m:
             continue
-        i, j = int(m.group(1)), int(m.group(2))
-        exp_list = result.get("experience", [])
-        if i >= len(exp_list):
+        kind, i, j = m.group(1), int(m.group(2)), int(m.group(3))
+        block_list = result.get("experience" if kind == "exp" else "projects", [])
+        if i >= len(block_list):
             continue
-        bullets = exp_list[i].get("bullets", [])
+        bullets = block_list[i].get("bullets", [])
         if j >= len(bullets):
             continue
         items.append({
@@ -175,8 +149,8 @@ def _revise_violations(
     )
 
     try:
-        raw = llm.complete(_REVISE_SYSTEM, dynamic, max_tokens=2048)
-        fixed_items = _extract_json_array(raw)
+        raw = invoke_llm_with_retry(llm.complete, _REVISE_SYSTEM, dynamic, max_tokens=2048)
+        fixed_items = robust_parse(raw)
         id_to_text = {
             item["id"]: item["text"]
             for item in fixed_items
@@ -184,15 +158,20 @@ def _revise_violations(
         }
 
         for bid, text in id_to_text.items():
-            m = re.match(r"exp(\d+)\.b(\d+)", bid)
+            m = re.match(r"(exp|proj)(\d+)\.b(\d+)", bid)
             if not m:
                 continue
-            i, j = int(m.group(1)), int(m.group(2))
-            exp_list = result.get("experience", [])
-            if i < len(exp_list):
-                exp_bullets = exp_list[i].get("bullets", [])
-                if j < len(exp_bullets):
-                    result["experience"][i]["bullets"][j] = text
+            kind, i, j = m.group(1), int(m.group(2)), int(m.group(3))
+            if kind == "exp":
+                if i < len(result.get("experience", [])):
+                    bullets = result["experience"][i].get("bullets", [])
+                    if j < len(bullets):
+                        result["experience"][i]["bullets"][j] = text
+            else:
+                if i < len(result.get("projects", [])):
+                    bullets = result["projects"][i].get("bullets", [])
+                    if j < len(bullets):
+                        result["projects"][i]["bullets"][j] = text
 
     except Exception as e:
         log.warning("[critic] revise call failed (%s) — keeping current bullets", e)
@@ -236,14 +215,13 @@ def run_critic(
         llm_result = _run_llm_critic(
             current, original_resume, entity_manifest, voice_anchor, required_keywords, llm
         )
-        llm_violations = llm_result.get("violations", [])
-        all_violations.extend(llm_violations)
+        requires_refinement = llm_result.get("requires_refinement", True)
 
-        combined = det_result["violations"] + llm_violations
-        if not combined:
+        current = _revise_violations(current, det_result["violations"], entity_manifest, voice_anchor, llm)
+
+        if not requires_refinement:
+            log.info("[critic] iteration %d: LLM critic says no further refinement needed", iteration)
             break
-
-        current = _revise_violations(current, combined, entity_manifest, voice_anchor, llm)
 
     log.info("[critic] done: %d total violation(s) across all iterations", len(all_violations))
     return current, all_violations

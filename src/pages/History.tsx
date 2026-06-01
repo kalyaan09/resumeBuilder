@@ -119,9 +119,6 @@ export default function History() {
                           <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">{row.role}</p>
                         </div>
                         <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
-                          <span className="rounded-full bg-black/[0.06] px-2.5 py-1 font-medium dark:bg-white/10">
-                            Match {typeof row.match_score === "number" ? `${row.match_score}%` : "—"}
-                          </span>
                           <span className="rounded-full bg-black/[0.06] px-2.5 py-1 dark:bg-white/10">
                             {profileLabel(row.profile_used)}
                           </span>

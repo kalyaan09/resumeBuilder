@@ -7,11 +7,14 @@ fn main() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // Only auto-start the sidecar in release builds.
             // In dev mode (`tauri dev`) run `python python/main.py` manually.
             #[cfg(not(debug_assertions))]
             start_sidecar(app)?;
+            #[cfg(debug_assertions)]
+            let _ = app;
             Ok(())
         })
         .run(tauri::generate_context!())

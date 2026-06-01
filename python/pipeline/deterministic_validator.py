@@ -74,11 +74,14 @@ def _entity_allowed(ent_text: str, allowed: set[str]) -> bool:
 
 
 def _collect_bullets(resume: dict) -> list[dict]:
-    """Return all experience bullets as [{"id": "exp0.b0", "text": "..."}]."""
+    """Return all experience and project bullets as [{"id": "exp0.b0", "text": "..."}]."""
     bullets = []
     for i, exp in enumerate(resume.get("experience", [])):
         for j, text in enumerate(exp.get("bullets", [])):
             bullets.append({"id": f"exp{i}.b{j}", "text": text})
+    for i, proj in enumerate(resume.get("projects", [])):
+        for j, text in enumerate(proj.get("bullets", [])):
+            bullets.append({"id": f"proj{i}.b{j}", "text": text})
     return bullets
 
 
@@ -148,34 +151,37 @@ def run_deterministic_checks(
             "fix": "Remove em dash from summary",
         })
 
-    # 4. Unsafe verb upgrade check (seed from original validate_output logic)
-    orig_exps = original_resume.get("experience", [])
-    for i, exp in enumerate(resume.get("experience", [])):
-        if i >= len(orig_exps):
-            break
-        orig_exp = orig_exps[i]
-        orig_bullets = orig_exp.get("bullets", [])
-        for j, bullet_text in enumerate(exp.get("bullets", [])):
-            if j >= len(orig_bullets):
+    # 4. Unsafe verb upgrade check
+    def check_verbs(prefix, current_blocks, original_blocks):
+        for i, block in enumerate(current_blocks):
+            if i >= len(original_blocks):
                 break
-            first_word = (
-                bullet_text.strip().split()[0].lower().rstrip(".,")
-                if bullet_text.strip() else ""
-            )
-            orig_first = (
-                orig_bullets[j].strip().split()[0].lower().rstrip(".,")
-                if orig_bullets[j].strip() else ""
-            )
-            if first_word in UNSAFE_VERB_UPGRADES and orig_first not in UNSAFE_VERB_UPGRADES:
-                violations.append({
-                    "rule": "UNSAFE_VERB",
-                    "bullet_id": f"exp{i}.b{j}",
-                    "span": first_word,
-                    "fix": (
-                        f"Replace '{first_word}' with a safer verb; "
-                        f"original started with '{orig_first}'"
-                    ),
-                })
+            orig_block = original_blocks[i]
+            orig_bullets = orig_block.get("bullets", [])
+            for j, bullet_text in enumerate(block.get("bullets", [])):
+                if j >= len(orig_bullets):
+                    break
+                first_word = (
+                    bullet_text.strip().split()[0].lower().rstrip(".,")
+                    if bullet_text.strip() else ""
+                )
+                orig_first = (
+                    orig_bullets[j].strip().split()[0].lower().rstrip(".,")
+                    if orig_bullets[j].strip() else ""
+                )
+                if first_word in UNSAFE_VERB_UPGRADES and orig_first not in UNSAFE_VERB_UPGRADES:
+                    violations.append({
+                        "rule": "UNSAFE_VERB",
+                        "bullet_id": f"{prefix}{i}.b{j}",
+                        "span": first_word,
+                        "fix": (
+                            f"Replace '{first_word}' with a safer verb; "
+                            f"original started with '{orig_first}'"
+                        ),
+                    })
+
+    check_verbs("exp", resume.get("experience", []), original_resume.get("experience", []))
+    check_verbs("proj", resume.get("projects", []), original_resume.get("projects", []))
 
     # 5. Entity fabrication check — only runs if spaCy is available
     fabricated: list[str] = []

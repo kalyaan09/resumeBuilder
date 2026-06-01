@@ -45,16 +45,6 @@ const PROVIDERS: Array<{
           { value: "gemini-3-flash-preview",       label: "gemini-3-flash-preview",       note: "Latest flash, fast general use" },
           { value: "gemini-3.1-pro-preview",       label: "gemini-3.1-pro-preview",       note: "Best quality for complex reasoning and coding" },
           { value: "gemini-3.1-flash-lite-preview",label: "gemini-3.1-flash-lite-preview",note: "Fastest, low latency and high volume" },
-          {
-            value: "gemma-4-31b-it",
-            label: "gemma-4-31b-it",
-            note: "Open model; uses the same google.generativeai API path as AI Studio Python snippets.",
-          },
-          {
-            value: "models/gemma-4-31b-it",
-            label: "models/gemma-4-31b-it",
-            note: "Alternate model id form if the short name fails.",
-          },
         ],
       },
     ],

@@ -78,6 +78,7 @@ export default function SettingsProfileEdit() {
   const [syncing, setSyncing] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [reviewPending, setReviewPending] = useState(false);
 
   const [addSectionOpen, setAddSectionOpen] = useState(false);
   const [addSectionKey, setAddSectionKey] = useState<(typeof OPTIONAL_SECTION_KEYS)[number]>("certifications");
@@ -123,6 +124,7 @@ export default function SettingsProfileEdit() {
   function handleSectionChange(key: string, newContent: unknown) {
     setEditedEditable((prev) => (prev ? { ...prev, [key]: newContent } : prev));
     setDirty(true);
+    setReviewPending(true);
     setSuggestions(null);
     setSyncError(null);
   }
@@ -215,6 +217,7 @@ export default function SettingsProfileEdit() {
       setFullProfile(payload);
       setMasterEditable(pickEditableSections(payload));
       setDirty(false);
+      setReviewPending(false);
       setSuggestions(null);
       await refresh();
     } catch (e: unknown) {
@@ -242,6 +245,7 @@ export default function SettingsProfileEdit() {
       });
       const list = (data.suggestions || []) as Suggestion[];
       setSuggestions(list);
+      setReviewPending(false);
     } catch (e: unknown) {
       setSyncError(e instanceof Error ? e.message : "Sync failed");
       setSuggestions(null);
@@ -254,6 +258,8 @@ export default function SettingsProfileEdit() {
     if (masterEditable?.[key] !== undefined) {
       setEditedEditable((prev) => (prev ? { ...prev, [key]: masterEditable[key] } : prev));
       setDirty(true);
+      setReviewPending(true);
+      setSuggestions(null);
     }
   }
 
@@ -307,9 +313,9 @@ export default function SettingsProfileEdit() {
                 <Sparkles data-icon="inline-start" />
                 {syncing ? "Reviewing…" : "Review by AI"}
               </Button>
-              <Button type="button" variant="secondary" size="sm" onClick={() => void handleSave()} disabled={!dirty || saving || syncing || loading}>
+              <Button type="button" variant="secondary" size="sm" onClick={() => void handleSave()} disabled={!dirty || saving || syncing || loading || reviewPending} title={reviewPending ? "Run Review by AI before saving" : undefined}>
                 <Save data-icon="inline-start" />
-                {saving ? "Saving…" : "Save"}
+                {saving ? "Saving…" : reviewPending ? "Review first" : "Save"}
               </Button>
             </div>
           </header>
@@ -349,6 +355,7 @@ export default function SettingsProfileEdit() {
                         const on = e.target.checked;
                         setUseCustomSectionOrder(on);
                         setDirty(true);
+                        setReviewPending(true);
                         setSuggestions(null);
                         if (on) {
                           setSectionOrderLocal((cur) =>
@@ -375,6 +382,7 @@ export default function SettingsProfileEdit() {
                         onReorder={(next) => {
                           setSectionOrderLocal(next);
                           setDirty(true);
+                          setReviewPending(true);
                           setSuggestions(null);
                         }}
                       />

@@ -9,8 +9,14 @@ import { readConfig, writeConfig } from "./lib/persistenceStore";
 import { applyTheme, Theme } from "./lib/themeStore";
 import { ConnectionContext } from "./context/ConnectionContext";
 import { ProfilesContext } from "./context/ProfilesContext";
-import type { Profile } from "./lib/sidecarApi";
+import type { Profile, TransformersContext } from "./lib/sidecarApi";
 import { getProfiles, switchProfile } from "./lib/sidecarApi";
+
+type TailoredGaps = {
+  missing_skills?: string[];
+  removed_unsupported_skills?: string[];
+  added_supported_skills?: string[];
+};
 
 function App() {
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
@@ -19,6 +25,12 @@ function App() {
   const [backendConnecting, setBackendConnecting] = useState(true);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+
+  // Tailored resume state — lifted here so it survives Editor ↔ History ↔ Settings navigation.
+  const [jdText, setJdText] = useState("");
+  const [editedResume, setEditedResume] = useState<Record<string, unknown> | null>(null);
+  const [tailoredGaps, setTailoredGaps] = useState<TailoredGaps | null>(null);
+  const [transformersContext, setTransformersContext] = useState<TransformersContext>({});
 
   const refreshProfiles = useCallback(async () => {
     try {
@@ -144,7 +156,18 @@ function App() {
               element={setupComplete ? <Navigate to="/editor" replace /> : <Navigate to="/setup" replace />}
             />
             <Route path="/setup" element={<Setup onComplete={() => setSetupComplete(true)} />} />
-            <Route path="/editor" element={<Editor />} />
+            <Route path="/editor" element={
+              <Editor
+                jdText={jdText}
+                setJdText={setJdText}
+                editedResume={editedResume}
+                setEditedResume={setEditedResume}
+                gaps={tailoredGaps}
+                setGaps={setTailoredGaps}
+                transformersContext={transformersContext}
+                setTransformersContext={setTransformersContext}
+              />
+            } />
             <Route path="/history" element={<History />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/settings/profile/:profileId/edit" element={<SettingsProfileEdit />} />

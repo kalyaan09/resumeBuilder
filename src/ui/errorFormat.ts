@@ -69,7 +69,7 @@ export function formatAiError(raw: string): FriendlyError {
     return {
       title: "Connection dropped while tailoring",
       message:
-        "Tailoring can take many minutes on slow models (for example Gemma). The browser lost the link to the local preview service before a response arrived—often a timeout, sleep/wake, or a busy CPU. Keep this window in the foreground, click Retry, or restart the preview service. If Gemini Flash hits a daily free limit, Gemma is still an option; it is just slower.",
+        "Tailoring can take several minutes on slower models. The browser lost the link to the local preview service before a response arrived—often a timeout, sleep/wake, or a busy CPU. Keep this window in the foreground, click Retry, or restart the preview service.",
       code,
       raw: text,
     };
@@ -105,7 +105,7 @@ export function formatAiError(raw: string): FriendlyError {
     return {
       title: "Rate limited",
       message:
-        "Too many requests or the daily free-tier cap for this model (common on gemini-2.5-flash). Limits reset on Google’s schedule—wait, enable billing in Google AI Studio for higher quotas, or use another model (for example Gemma—expect slower runs and occasional retries).",
+        "Too many requests or the daily free-tier cap for this model (common on gemini-2.5-flash). Limits reset on Google’s schedule—wait, enable billing in Google AI Studio for higher quotas, or switch to a different Gemini model.",
       code: code ?? 429,
       raw: text,
     };

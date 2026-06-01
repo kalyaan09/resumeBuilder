@@ -13,11 +13,18 @@
   body {
     font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
     font-size: 10pt;
-    color: #000;
-    line-height: 1.2;
+    color: #111;
+    line-height: 1.38;
     zoom: {{ meta.fontSize / 10.0 }};
     padding: 0;
     background: #fff;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Justified body copy; headers and section titles stay left/center */
+  p, .resume-body, .bullets li, .skills-list li, .cert-row, .pub-entry {
+    text-align: justify;
   }
 
   a { color: #000; text-decoration: underline; }
@@ -105,9 +112,9 @@
   }
 
   .bullets li {
-    font-size: 9.5pt;
-    line-height: 1.3;
-    margin-bottom: 1pt;
+    font-size: 10pt;
+    line-height: 1.38;
+    margin-bottom: 2pt;
     break-inside: avoid;
     page-break-inside: avoid;
   }
@@ -145,9 +152,9 @@
   }
 
   .skills-list li {
-    font-size: 9.5pt;
-    line-height: 1.4;
-    margin-bottom: 1pt;
+    font-size: 10pt;
+    line-height: 1.38;
+    margin-bottom: 2pt;
   }
 
   /* ── MISC ───────────────────────────────── */
@@ -187,7 +194,7 @@
   {% if section_name == 'summary' and resume.summary %}
   <div class="section">
     <div class="section-title">Summary</div>
-    <p style="font-size:9.5pt; line-height:1.35;">{{ resume.summary }}</p>
+    <p class="resume-body" style="font-size:10pt; line-height:1.38;">{{ resume.summary }}</p>
   </div>
 
   {# ── EDUCATION ── #}

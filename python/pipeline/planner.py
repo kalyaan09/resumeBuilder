@@ -3,11 +3,12 @@ Planner agent — Gap 1b.
 Produces a per-bullet edit plan (keep/polish/rewrite/drop) with routing
 rules enforced deterministically after the LLM responds.
 """
-import json
-import re
 import logging
+import re
 from typing import Literal
 from pydantic import BaseModel
+
+from .utils import robust_parse, invoke_llm_with_retry
 
 log = logging.getLogger("resume")
 
@@ -33,7 +34,7 @@ class EditPlan(BaseModel):
 
 _PLANNER_SYSTEM = """You are a resume edit planner for JOB-SPECIFIC tailoring. The candidate is applying to THIS role; the resume must visibly align with the job description.
 
-For EVERY bullet listed, output a BulletPlan. Fill relevance (0-5 JD fit), strength (0-5), has_numeric, and missing_kw BEFORE choosing action.
+For EVERY bullet listed (Experience expX.bX and Project projX.bX), output a BulletPlan. Fill relevance (0-5 JD fit), strength (0-5), has_numeric, and missing_kw BEFORE choosing action.
 
 Tailoring stance (important):
 - "keep" should be UNCOMMON. Use it only when the bullet already reflects JD language (keywords/themes) AND is tight and metric-backed.
@@ -47,50 +48,32 @@ Action guide:
 - rewrite: Same facts, different emphasis to match JD; use when relevance is low-medium but experience could be reframed truthfully.
 - drop:    Truly off-topic for this posting AND weak AND no numbers.
 
-Return ONLY valid JSON (no commentary, no code fences):
+CRITICAL: Return ONLY valid JSON wrapped in [OUTPUT_ONLY_JSON] tags. No markdown fences. No preamble. No analysis.
+
+Example:
+[OUTPUT_ONLY_JSON]
 {
-  "role_match": "detected role from JD",
-  "seniority": "entry|junior|mid|senior|staff|principal",
-  "required_keywords": ["keyword1", "keyword2"],
-  "preferred_keywords": ["keyword3"],
-  "summary_instruction": "one sentence: what the summary rewrite should achieve",
+  "role_match": "detected role",
   "bullet_plans": [
-    {
-      "id": "exp0.b0",
-      "relevance": 4,
-      "strength": 3,
-      "has_numeric": true,
-      "missing_kw": [],
-      "action": "keep",
-      "rationale": "one sentence"
-    }
+    {"bullet_id": "exp0.b0", "relevance": 4, "strength": 5, "has_numeric": true, "missing_kw": ["distributed"], "action": "polish"},
+    {"bullet_id": "exp1.b0", "relevance": 2, "strength": 3, "has_numeric": false, "missing_kw": [], "action": "drop"}
   ]
-}"""
+}
+[OUTPUT_ONLY_JSON]"""
 
 
-def _strip_trailing_commas(s: str) -> str:
-    # Gemini-2.5 sometimes emits trailing commas in arrays/objects, which json.loads rejects.
-    return re.sub(r",(\s*[}\]])", r"\1", s)
+_PLANNER_RETRY_PROMPT = """Your previous attempt to generate a bullet routing plan failed JSON validation.
 
+ORIGINAL INSTRUCTIONS:
+{original_instructions}
 
-def _extract_json(raw: str) -> dict:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-        if "```" in raw:
-            raw = raw.rsplit("```", 1)[0]
-        raw = raw.strip()
-    if not raw.startswith("{"):
-        idx = raw.find("{")
-        if idx == -1:
-            raise ValueError("No JSON object found")
-        raw = raw[idx:]
-    if not raw.endswith("}"):
-        idx = raw.rfind("}")
-        if idx == -1:
-            raise ValueError("No closing } found")
-        raw = raw[:idx + 1]
-    return json.loads(_strip_trailing_commas(raw))
+YOUR PREVIOUS OUTPUT (WITH ERROR):
+{raw_content}
+
+VALIDATION ERROR:
+{validation_error}
+
+Fix the JSON and return only a valid JSON object. No markdown fences."""
 
 
 def _has_numeric(text: str) -> bool:
@@ -106,6 +89,10 @@ def _build_bullet_listing(profile_resume: dict) -> str:
         lines.append(f"Experience {i}: {exp.get('title', '')} at {exp.get('company', '')}")
         for j, bullet in enumerate(exp.get("bullets", [])):
             lines.append(f"  exp{i}.b{j}: {bullet}")
+    for i, proj in enumerate(profile_resume.get("projects", [])):
+        lines.append(f"Project {i}: {proj.get('name', '')}")
+        for j, bullet in enumerate(proj.get("bullets", [])):
+            lines.append(f"  proj{i}.b{j}: {bullet}")
     return "\n".join(lines)
 
 
@@ -115,6 +102,17 @@ def _fallback_plan(profile_resume: dict, transformers_context: dict, required_ke
         for j, bullet in enumerate(exp.get("bullets", [])):
             bullet_plans.append(BulletPlan(
                 id=f"exp{i}.b{j}",
+                action="keep",
+                relevance=3,
+                strength=3,
+                has_numeric=_has_numeric(bullet),
+                missing_kw=[],
+                rationale="Fallback: planner parse failed",
+            ))
+    for i, proj in enumerate(profile_resume.get("projects", [])):
+        for j, bullet in enumerate(proj.get("bullets", [])):
+            bullet_plans.append(BulletPlan(
+                id=f"proj{i}.b{j}",
                 action="keep",
                 relevance=3,
                 strength=3,
@@ -144,6 +142,9 @@ def _bullet_text_by_id(profile_resume: dict) -> dict[str, str]:
     for i, exp in enumerate(profile_resume.get("experience", [])):
         for j, bullet in enumerate(exp.get("bullets", [])):
             out[f"exp{i}.b{j}"] = bullet if isinstance(bullet, str) else ""
+    for i, proj in enumerate(profile_resume.get("projects", [])):
+        for j, bullet in enumerate(proj.get("bullets", [])):
+            out[f"proj{i}.b{j}"] = bullet if isinstance(bullet, str) else ""
     return out
 
 
@@ -219,36 +220,56 @@ def run_planner(
     bullet_listing = _build_bullet_listing(profile_resume)
     keywords_str = ", ".join(required_keywords) if required_keywords else "see JD"
 
+    model_id = (getattr(llm, "model", None) or "").lower()
+    gemma_hint = ""
+    if "gemma" in model_id:
+        gemma_hint = (
+            "CRITICAL for Gemma: Output ONLY the JSON block. Do not analyze. Do not explain. "
+            "Your response must contain exactly the [OUTPUT_ONLY_JSON] tags with JSON in between.\n\n"
+        )
+
     dynamic = (
+        f"{gemma_hint}"
         f"{candidate_persona}\n\n"
         f"Priority JD keywords to surface: {keywords_str}\n\n"
         f"Job Description:\n{jd_text}\n\n"
         f"Resume bullets to plan:\n{bullet_listing}\n\n"
-        "Return the complete edit plan as JSON."
+        "Return the complete edit plan as JSON wrapped in [OUTPUT_ONLY_JSON] tags."
     )
-    model_id = (getattr(llm, "model", None) or "").lower()
-    if "gemma" in model_id:
-        dynamic += (
-            "\n\nCRITICAL for Gemma: Reply with exactly one JSON object. "
-            "The first non-whitespace character must be {. No analysis, headings, or bullet lists before or after the JSON."
-        )
 
+    raw = None
     try:
-        raw = llm.complete(_PLANNER_SYSTEM, dynamic, max_tokens=8192)
+        raw = invoke_llm_with_retry(llm.complete, _PLANNER_SYSTEM, dynamic, max_tokens=8192)
         log.debug("[planner] raw LLM response (%d chars):\n%s", len(raw), raw[:2000])
-        data = _extract_json(raw)
+        data = robust_parse(raw)
     except Exception as e:
-        log.warning("[planner] LLM call or parse failed (%s) — using keep-all fallback", e)
-        fb = _fallback_plan(profile_resume, transformers_context, required_keywords)
-        merged_fb_kw = list(dict.fromkeys([*(required_keywords or []), *(fb.required_keywords or [])]))
-        return finalize_plan(fb, profile_resume, jd_text, merged_fb_kw)
+        log.warning("[planner] initial parse failed (%s) — retrying with error context", e)
+        try:
+            retry_dynamic = _PLANNER_RETRY_PROMPT.format(
+                original_instructions=dynamic[:1000],
+                raw_content=raw or "",
+                validation_error=str(e),
+            )
+            raw = invoke_llm_with_retry(llm.complete, _PLANNER_SYSTEM, retry_dynamic, max_tokens=8192)
+            log.debug("[planner] retry raw LLM response (%d chars):\n%s", len(raw), raw[:2000])
+            data = robust_parse(raw)
+            log.info("[planner] retry succeeded after error-context prompt")
+        except Exception as e2:
+            log.warning("[planner] retry also failed (%s) — using keep-all fallback", e2)
+            fb = _fallback_plan(profile_resume, transformers_context, required_keywords)
+            merged_fb_kw = list(dict.fromkeys([*(required_keywords or []), *(fb.required_keywords or [])]))
+            return finalize_plan(fb, profile_resume, jd_text, merged_fb_kw)
 
     # Parse bullet plans from LLM output
     bullet_plans: list[BulletPlan] = []
+    if not isinstance(data, dict):
+        log.warning("[planner] robust_parse returned non-dict: %s", type(data))
+        data = {}
+
     for bp_data in data.get("bullet_plans", []):
         try:
             bullet_plans.append(BulletPlan(
-                id=bp_data.get("id", ""),
+                id=bp_data.get("bullet_id") or bp_data.get("bullet") or bp_data.get("id", ""),
                 action=bp_data.get("action", "keep"),
                 relevance=max(0, min(5, int(bp_data.get("relevance", 3)))),
                 strength=max(0, min(5, int(bp_data.get("strength", 3)))),
@@ -264,6 +285,20 @@ def run_planner(
     for i, exp in enumerate(profile_resume.get("experience", [])):
         for j, bullet in enumerate(exp.get("bullets", [])):
             bid = f"exp{i}.b{j}"
+            if bid not in planned_ids:
+                log.warning("[planner] LLM missed bullet %s — defaulting to keep", bid)
+                bullet_plans.append(BulletPlan(
+                    id=bid,
+                    action="keep",
+                    relevance=3,
+                    strength=3,
+                    has_numeric=_has_numeric(bullet),
+                    missing_kw=[],
+                    rationale="Not included in LLM plan — defaulting to keep",
+                ))
+    for i, proj in enumerate(profile_resume.get("projects", [])):
+        for j, bullet in enumerate(proj.get("bullets", [])):
+            bid = f"proj{i}.b{j}"
             if bid not in planned_ids:
                 log.warning("[planner] LLM missed bullet %s — defaulting to keep", bid)
                 bullet_plans.append(BulletPlan(

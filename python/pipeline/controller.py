@@ -178,6 +178,8 @@ def run_pipeline(
         jd_text=jd_text,
         llm=llm,
     )
+    log.info("[pipeline] navigation complete: exp_blocks=%d, proj_blocks=%d",
+             len(navigated.get("experience", [])), len(navigated.get("projects", [])))
 
     touch = _polish_rewrite_count(plan)
     unchanged = _bullet_unchanged_ratio(profile_resume, navigated)
