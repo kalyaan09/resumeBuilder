@@ -4,6 +4,7 @@ dist/
 
 # Rust / Tauri
 src-tauri/target/
+src-tauri/target/release/bundle/
 
 # Python
 python/__pycache__/
