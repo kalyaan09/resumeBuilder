@@ -23,11 +23,16 @@ echo "▶ Step 1/3 — Building Python sidecar with PyInstaller..."
 echo "  This bundles the FastAPI server + Playwright driver into one binary."
 echo "  System Chrome is used at runtime — no Chromium bundled (DMG ~80MB)."
 
-# Install PyInstaller if not present
-env/bin/pip install pyinstaller --quiet
+# Create venv if it doesn't exist or if the interpreter is stale
+if [ ! -f "python/env/bin/python" ] || ! python/env/bin/python --version &>/dev/null; then
+  echo "  Creating Python virtual environment at python/env..."
+  python3 -m venv python/env
+  python/env/bin/pip install -r python/requirements.txt --quiet
+fi
+python/env/bin/pip install pyinstaller --quiet
 
 cd python
-"$PROJECT_ROOT/env/bin/python" -m PyInstaller resume-sidecar.spec \
+"$PROJECT_ROOT/python/env/bin/python" -m PyInstaller resume-sidecar.spec \
     --clean \
     --noconfirm \
     --distpath "$PROJECT_ROOT/python/dist"

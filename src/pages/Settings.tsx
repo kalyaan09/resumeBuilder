@@ -9,9 +9,8 @@ import { getApiKey, setApiKey } from "../lib/secureStore";
 import { readConfig, writeConfig, readShared, readProfileResume, writeResume } from "../lib/persistenceStore";
 import { applyTheme, Theme } from "../lib/themeStore";
 import { Button, Modal, SegmentedControl, Surface, TypographyMuted } from "../ui";
-import { FolderOpen, Save, Sparkles, Trash2, X } from "lucide-react";
+import { FolderOpen, Save, Trash2 } from "lucide-react";
 import { cn } from "../ui/cn";
-import { formatAiError } from "../ui/errorFormat";
 import { useProfiles } from "../context/ProfilesContext";
 import { createProfile, deleteProfile as deleteProfileApi, getProfileResume, getShared, putProfileResume, putShared, resetAll } from "../lib/sidecarApi";
 import { CORE_SECTION_KEYS, SECTION_LABELS, computeSectionsWithData, getDefaultSectionOrderFromConfig, mergeVisibleReorderWithHidden } from "../lib/sectionOrder";
@@ -125,11 +124,6 @@ function TemplateThumb({
   );
 }
 
-interface Suggestion {
-  section: string;
-  type: "error" | "warning" | "info";
-  message: string;
-}
 
 
 // Profile JSON contains "id" and "name" metadata. Never render these as resume sections.
@@ -169,12 +163,6 @@ export default function Settings() {
 
   const [editedShared, setEditedShared] = useState<Record<string, unknown> | null>(null);
   const [editedProfile, setEditedProfile] = useState<Record<string, unknown> | null>(null);
-
-  const [syncing, setSyncing] = useState(false);
-  const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [dismissedReviewBanner, setDismissedReviewBanner] = useState(false);
-  const [showReviewErrorDetails, setShowReviewErrorDetails] = useState(false);
 
   const [loading, setLoading] = useState(true);
 
@@ -317,7 +305,6 @@ export default function Settings() {
       setEditedResume((prev) => (prev ? { ...prev, [key]: newContent } : prev));
     }
     setResumeDirty(true);
-    setSuggestions(null);
   }
 
   function handleResetSection(key: string) {
@@ -354,51 +341,9 @@ export default function Settings() {
     setResumeDirty(true);
   }
 
-  async function handleSyncAndSave() {
-    if (!editedResume) return;
-    setSyncing(true);
-    setSyncError(null);
-    setSuggestions(null);
-    setDismissedReviewBanner(false);
-    setShowReviewErrorDetails(false);
-
-    try {
-      const llmConfig = await fullLlmConfig();
-      const res = await fetch(`${SIDECAR}/sync-master-resume`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          resume_before: masterResume || {},
-          resume_after: editedResume,
-          role: (config?.role as string) || "",
-          level: (config?.level as string) || "",
-          llm_config: llmConfig,
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error(await readErrorDetailFromResponse(res));
-      }
-
-      const data = await res.json();
-      setSuggestions(data.suggestions || []);
-
-      if (!data.suggestions || data.suggestions.length === 0) {
-        await saveResume();
-      }
-    } catch (e: unknown) {
-      setSyncError(e instanceof Error ? e.message : "Sync failed");
-      // Keep suggestions cleared so UI doesn't imply "all clear"
-      setSuggestions(null);
-    } finally {
-      setSyncing(false);
-    }
-  }
-
   async function saveResume() {
     if (!editedResume) return;
     setResumeSaving(true);
-    setSyncError(null);
     try {
       if (activeProfileId && profiles.length > 0) {
         await Promise.all([
@@ -410,9 +355,8 @@ export default function Settings() {
       }
       setMasterResume(editedResume);
       setResumeDirty(false);
-      setSuggestions(null);
-    } catch (e: unknown) {
-      setSyncError(e instanceof Error ? e.message : "Save failed");
+    } catch {
+      // save failure is silent — user can retry via the Save button
     } finally {
       setResumeSaving(false);
     }
