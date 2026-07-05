@@ -60,7 +60,7 @@ def _run_llm_critic(
     llm,
 ) -> dict:
     bullets = _collect_bullets(resume)
-    allowed_entities = entity_manifest.get("all_entities", [])[:30]
+    allowed_entities = entity_manifest.get("all_entities", [])[:60]
 
     dynamic = (
         f"Required keywords (check if surfaced): {', '.join(required_keywords)}\n"
@@ -116,7 +116,7 @@ def _revise_violations(
     if not by_bullet:
         return result
 
-    allowed_entities = entity_manifest.get("all_entities", [])[:30]
+    allowed_entities = entity_manifest.get("all_entities", [])[:60]
     entity_str = ", ".join(str(e) for e in allowed_entities)
 
     # Build revision request
@@ -208,16 +208,17 @@ def run_critic(
             break
 
         log.info(
-            "[critic] iteration %d: %d deterministic violation(s) — invoking LLM critic",
+            "[critic] iteration %d: %d deterministic violation(s) — fixing before LLM eval",
             iteration, len(det_result["violations"]),
         )
+
+        # Fix violations first so the LLM critic evaluates the clean output, not the broken one
+        current = _revise_violations(current, det_result["violations"], entity_manifest, voice_anchor, llm)
 
         llm_result = _run_llm_critic(
             current, original_resume, entity_manifest, voice_anchor, required_keywords, llm
         )
         requires_refinement = llm_result.get("requires_refinement", True)
-
-        current = _revise_violations(current, det_result["violations"], entity_manifest, voice_anchor, llm)
 
         if not requires_refinement:
             log.info("[critic] iteration %d: LLM critic says no further refinement needed", iteration)

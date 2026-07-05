@@ -50,6 +50,15 @@ def analyze_critic_patterns(history_path: Path = VIOLATIONS_PATH) -> dict:
     }
 
 
+def jd_coverage(resume: dict, keywords: list[str]) -> tuple[float, list[str]]:
+    """Fraction of JD must-include keywords present in the final resume text."""
+    if not keywords:
+        return 1.0, []
+    text = json.dumps(resume).lower()
+    missing = [k for k in keywords if k and k.lower() not in text]
+    return 1.0 - (len(missing) / len(keywords)), missing
+
+
 def _polish_rewrite_count(plan: EditPlan) -> int:
     return sum(1 for bp in plan.bullet_plans if bp.action in ("polish", "rewrite"))
 
@@ -109,7 +118,8 @@ def run_pipeline(
     config: dict,
     candidate_persona: str,
     skill_allowlist: list[str],
-) -> tuple[dict, list[dict]]:
+    progress=None,
+) -> tuple[dict, list[dict], dict]:
     """
     Orchestrate the 4-agent pipeline:
       1. Entity Manifest (deterministic)
@@ -117,11 +127,19 @@ def run_pipeline(
       3. Navigator (LLM) — route-specific rewrites + summary last
       4. Critic (deterministic + optional LLM) — validate and fix
 
-    Returns (tailored_resume, all_violations_found).
+    Returns (tailored_resume, all_violations_found, meta) where meta carries
+    jd_coverage (0..1) and jd_missing_keywords.
     Raises on unrecoverable error so the caller can fall back gracefully.
     """
     from llm_client import LLMClient
     llm = LLMClient.from_config(llm_config)
+
+    def report(stage: str) -> None:
+        if progress is not None:
+            try:
+                progress(stage)
+            except Exception:
+                pass
 
     required_keywords: list[str] = transformers_context.get("must_include_keywords", [])
     profile_id: str = profile_resume.get("id", "")
@@ -129,6 +147,7 @@ def run_pipeline(
 
     # ── Step 1: Entity manifest ──────────────────────────────────────────────
     log.info("[pipeline] step 1/4 — entity manifest")
+    report("manifest")
     resume_parts = []
     for exp in profile_resume.get("experience", []):
         resume_parts.append(exp.get("title", ""))
@@ -144,6 +163,7 @@ def run_pipeline(
 
     # ── Step 2: Planner ──────────────────────────────────────────────────────
     log.info("[pipeline] step 2/4 — planner")
+    report("planner")
     plan = run_planner(
         profile_resume=profile_resume,
         basics=basics,
@@ -170,6 +190,7 @@ def run_pipeline(
 
     # ── Step 3: Navigator ────────────────────────────────────────────────────
     log.info("[pipeline] step 3/4 — navigator")
+    report("navigator")
     navigated = run_navigator(
         profile_resume=profile_resume,
         plan=plan,
@@ -217,6 +238,7 @@ def run_pipeline(
 
     # ── Step 4: Critic ───────────────────────────────────────────────────────
     log.info("[pipeline] step 4/4 — critic")
+    report("critic")
     voice_anchor = build_voice_anchor(profile_resume, plan.bullet_plans)
     validated, violations = run_critic(
         resume=navigated,
@@ -253,7 +275,10 @@ def run_pipeline(
         else:
             log.info("  %s: %s", key, str(val)[:80])
 
+    coverage, missing_kw = jd_coverage(validated, required_keywords)
+    log.info("[pipeline] JD keyword coverage: %.0f%% (missing: %s)", coverage * 100, missing_kw)
+
     # Store violations for /prompt-health (non-blocking)
     _store_pipeline_violations(violations, profile_id, role)
 
-    return validated, violations
+    return validated, violations, {"jd_coverage": coverage, "jd_missing_keywords": missing_kw}

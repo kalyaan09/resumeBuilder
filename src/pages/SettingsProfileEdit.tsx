@@ -75,6 +75,7 @@ export default function SettingsProfileEdit() {
 
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -186,12 +187,12 @@ export default function SettingsProfileEdit() {
         setEditedEditable(picked);
         setDirty(true);
       } else {
-        for (const p of profiles) {
+        await Promise.all(profiles.map(async (p) => {
           const cur = await getProfileResume(p.id);
           const next = { ...(cur || {}) } as Record<string, unknown>;
           if (!sectionHasData(next[addSectionKey])) next[addSectionKey] = seedSectionValue(addSectionKey);
           await putProfileResume(p.id, next);
-        }
+        }));
         const refreshed = await getProfileResume(profileId);
         setFullProfile(refreshed || {});
         const picked = pickEditableSections((refreshed || {}) as Record<string, unknown>);
@@ -219,6 +220,8 @@ export default function SettingsProfileEdit() {
       setDirty(false);
       setReviewPending(false);
       setSuggestions(null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
       await refresh();
     } catch (e: unknown) {
       setSyncError(e instanceof Error ? e.message : "Save failed");
@@ -315,7 +318,7 @@ export default function SettingsProfileEdit() {
               </Button>
               <Button type="button" variant="secondary" size="sm" onClick={() => void handleSave()} disabled={!dirty || saving || syncing || loading || reviewPending} title={reviewPending ? "Run Review by AI before saving" : undefined}>
                 <Save data-icon="inline-start" />
-                {saving ? "Saving…" : reviewPending ? "Review first" : "Save"}
+                {saved ? "Saved" : saving ? "Saving…" : reviewPending ? "Review first" : "Save"}
               </Button>
             </div>
           </header>

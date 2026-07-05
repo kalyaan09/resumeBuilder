@@ -28,17 +28,28 @@ export async function getApiKey(provider: string): Promise<string> {
 
 export async function setApiKey(provider: string, key: string): Promise<void> {
   if (!provider) return;
-  // Always write to localStorage first so getApiKey can fall back to it.
-  const keys = JSON.parse(localStorage.getItem(LS_FALLBACK_KEY) || "{}");
-  keys[provider] = key;
-  localStorage.setItem(LS_FALLBACK_KEY, JSON.stringify(keys));
-  // Also persist to Tauri Store (encrypted, preferred in production).
   try {
+    // In Tauri: use encrypted store only — do NOT persist to localStorage so keys don't survive uninstall.
     const { Store } = await import("@tauri-apps/plugin-store");
     const store = await Store.load(STORE_FILE);
     await store.set(provider, key);
     await store.save();
   } catch {
-    // Not in Tauri context — localStorage fallback already written above.
+    // Browser dev mode: fall back to localStorage.
+    const keys = JSON.parse(localStorage.getItem(LS_FALLBACK_KEY) || "{}");
+    keys[provider] = key;
+    localStorage.setItem(LS_FALLBACK_KEY, JSON.stringify(keys));
+  }
+}
+
+export async function clearAllApiKeys(): Promise<void> {
+  localStorage.removeItem(LS_FALLBACK_KEY);
+  try {
+    const { Store } = await import("@tauri-apps/plugin-store");
+    const store = await Store.load(STORE_FILE);
+    await store.clear();
+    await store.save();
+  } catch {
+    // not in Tauri — localStorage already cleared above
   }
 }

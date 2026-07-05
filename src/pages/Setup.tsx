@@ -19,7 +19,7 @@ interface SetupProps {
 
 type Phase = "theme" | "model" | "info" | "extracting" | "suggestion";
 
-const SIDECAR = "http://localhost:8000";
+const SIDECAR = "http://localhost:47372";
 /** Bust WebView cache for embedded template PDFs (keep in sync with Settings PREVIEW_ASSET_VERSION). */
 const TEMPLATE_PREVIEW_V = 8;
 
@@ -94,6 +94,7 @@ export default function Setup({ onComplete }: SetupProps) {
 
   // Suggestion state
   const [suggestion, setSuggestion] = useState<{ template: string; sections: string[]; reason: string } | null>(null);
+  const [originalSuggestion, setOriginalSuggestion] = useState<{ template: string; sections: string[]; reason: string } | null>(null);
   const [editTemplate, setEditTemplate] = useState("");
   const [editSections, setEditSections] = useState<string[]>([]);
   const [userFeedback, setUserFeedback] = useState("");
@@ -159,7 +160,7 @@ export default function Setup({ onComplete }: SetupProps) {
 
       // Step 1: Extract resume content (preview only; profile is created on "Looks good!")
       setExtractStatus("Extracting resume content with AI (15–30s)...");
-      const extractRes = await fetch("http://localhost:8000/extract-resume", {
+      const extractRes = await fetch("http://localhost:47372/extract-resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ file_content: base64, file_name: resumeFile.name, llm_config }),
@@ -173,7 +174,7 @@ export default function Setup({ onComplete }: SetupProps) {
 
       // Step 2: Get template + section suggestion
       setExtractStatus("Selecting best template and section layout...");
-      const validateRes = await fetch("http://localhost:8000/validate-template", {
+      const validateRes = await fetch("http://localhost:47372/validate-template", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role, level, llm_config }),
@@ -185,6 +186,7 @@ export default function Setup({ onComplete }: SetupProps) {
 
       const validateData = await validateRes.json();
       setSuggestion(validateData);
+      setOriginalSuggestion(validateData);
       setEditTemplate(validateData.template);
       setEditSections([...validateData.sections]);
       setPhase("suggestion");
@@ -203,7 +205,7 @@ export default function Setup({ onComplete }: SetupProps) {
     setLlmWarning(null);
     try {
       const llm_config = { ...modelConfig, api_key: apiKey };
-      const res = await fetch("http://localhost:8000/validate-template", {
+      const res = await fetch("http://localhost:47372/validate-template", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -297,9 +299,9 @@ export default function Setup({ onComplete }: SetupProps) {
       );
       await Promise.all([writeShared(sharedData), writeProfileResume(profile.id, profileData)]);
 
-      // Step 5: Verify profile exists before navigating
-      const { profiles: verifiedProfiles } = await getProfiles();
-      if (verifiedProfiles.length === 0) {
+      // Step 5: Verify profile exists before navigating (best-effort; don't block on network blip)
+      const verifyResult = await getProfiles().catch(() => null);
+      if (verifyResult && verifyResult.profiles.length === 0) {
         throw new Error("Profile verification failed: GET /profiles returned 0 profiles");
       }
 
@@ -420,8 +422,12 @@ export default function Setup({ onComplete }: SetupProps) {
                   size="xs"
                   className="w-fit px-4 font-semibold"
                   onClick={async () => {
-                    const prev = (await readConfig()) || {};
-                    await writeConfig({ ...prev, theme: selectedTheme });
+                    try {
+                      const prev = (await readConfig()) || {};
+                      await writeConfig({ ...prev, theme: selectedTheme });
+                    } catch {
+                      // non-critical: theme defaults to system on next launch
+                    }
                     setPhase("model");
                   }}
                 >
@@ -583,6 +589,9 @@ export default function Setup({ onComplete }: SetupProps) {
                   This usually takes 15–30 seconds
                 </TypographyMuted>
               </div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setPhase("info")}>
+                Cancel
+              </Button>
             </div>
           )}
 
@@ -720,8 +729,10 @@ export default function Setup({ onComplete }: SetupProps) {
                           size="sm"
                           className="h-8 px-2 text-xs"
                           onClick={() => {
-                            setEditTemplate(suggestion.template);
-                            setEditSections([...suggestion.sections]);
+                            const orig = originalSuggestion || suggestion;
+                            setEditTemplate(orig.template);
+                            setEditSections([...orig.sections]);
+                            setSuggestion(orig);
                             setLlmWarning(null);
                             setUserFeedback("");
                             setValidateError("");

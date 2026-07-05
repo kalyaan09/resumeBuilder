@@ -68,6 +68,7 @@ _ROUTED_SYSTEM = """You are editing resume bullets for one job description. Each
 The missing_kw field tells you which JD keywords are absent from the bullet. Your goal is to surface as many as honestly apply.
 
 Shared rules:
+- LENGTH BUDGET: each output bullet must be at most 210 characters (about two printed lines). If an input bullet is longer, condense it — keep every number and proper noun, cut filler and subordinate clauses. Never pad a short bullet to fill space.
 - Return ONLY a valid JSON array wrapped in [OUTPUT_ONLY_JSON] tags, same length and ids as input, in the same order.
 - Do NOT use em dashes (—); use commas or semicolons.
 - Do NOT use: leverage, leveraging, utilize, harness, foster, streamline, pivotal, spearhead, synergy, transformative, robust, seamless.
@@ -402,7 +403,7 @@ def run_navigator(
             all_items.append({"id": f"proj{i}.b{j}", "text": text, "missing_kw": bp.missing_kw, "route": "rewrite"})
 
     # ONE LLM call for all bullets across all blocks
-    entity_str = ", ".join(str(e) for e in entity_manifest.get("all_entities", [])[:30]) or "see resume"
+    entity_str = ", ".join(str(e) for e in entity_manifest.get("all_entities", [])[:60]) or "see resume"
     jd_snippet = jd_text[:800]
     if all_items:
         log.info("[navigator] single batch call: %d bullets across %d blocks", len(all_items), len(exp_block_data) + len(proj_block_data))
@@ -426,14 +427,11 @@ def run_navigator(
             elif j in rewrites: assembled.append(id_map.get(f"exp{i}.b{j}", rewrites[j][0]))
 
         if assembled:
-            pairs = []
+            # Preserve original bullet order — candidate's ordering is intentional
+            result["experience"][i]["bullets"] = assembled
             for j, text in zip(ordered_indices, assembled):
                 bp = plans_for_block.get(f"exp{i}.b{j}") or default_bp
-                pairs.append((bp.relevance, text))
-            pairs.sort(key=lambda x: -x[0])
-            ordered_bullets = [p[1] for p in pairs]
-            result["experience"][i]["bullets"] = ordered_bullets
-            all_rewritten.extend(pairs)
+                all_rewritten.append((bp.relevance, text))
 
     # Project blocks
     for i, keeps, polishes, rewrites, ordered_indices in proj_block_data:
@@ -445,14 +443,10 @@ def run_navigator(
             elif j in rewrites: assembled.append(id_map.get(f"proj{i}.b{j}", rewrites[j][0]))
 
         if assembled:
-            pairs = []
+            result["projects"][i]["bullets"] = assembled
             for j, text in zip(ordered_indices, assembled):
                 bp = plans_for_block.get(f"proj{i}.b{j}") or default_bp
-                pairs.append((bp.relevance, text))
-            pairs.sort(key=lambda x: -x[0])
-            ordered_bullets = [p[1] for p in pairs]
-            result["projects"][i]["bullets"] = ordered_bullets
-            all_rewritten.extend(pairs)
+                all_rewritten.append((bp.relevance, text))
 
     # Summary runs LAST — fed by top 5 bullets by relevance
     top_bullets = [

@@ -2,28 +2,33 @@ import { useState, useLayoutEffect, useRef } from "react";
 
 // ── Shared primitives ────────────────────────────────────────────────────────
 
+/* Notion-style inline editing: reads as document text at rest, shows a tint on
+   hover, and becomes a real field only while focused. Boxing every input made
+   the page an undifferentiated wall of rectangles. */
 const inputBase =
-  "bg-transparent border-b border-transparent hover:border-gray-200 dark:hover:border-gray-600 focus:border-brand-500 focus:outline-none transition-colors";
+  "rounded-md border border-transparent bg-transparent px-1 py-0.5 placeholder:text-gray-400 hover:bg-black/[0.04] focus:border-brand-500/70 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/15 transition-colors dark:placeholder:text-gray-500 dark:hover:bg-white/[0.06] dark:focus:border-brand-400/70 dark:focus:bg-[#1C1C1E]";
 
 function InlineInput({
   value,
   onChange,
   placeholder = "…",
   className = "",
+  fit = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   className?: string;
+  /** Size the input to its content (for chips/pills). */
+  fit?: boolean;
 }) {
-  const width = Math.max((value || "").length, (placeholder || "").length, 3) + 1;
   return (
     <input
       type="text"
       value={value || ""}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
-      style={{ width: `${width}ch` }}
+      size={fit ? Math.max((value || placeholder).length, 2) : undefined}
       className={`${inputBase} max-w-full ${className}`}
     />
   );
@@ -76,7 +81,7 @@ function InlineTextarea({
         onChange(e.target.value);
       }}
       rows={2}
-      className={`w-full bg-transparent border border-transparent hover:border-gray-200 dark:hover:border-gray-600 focus:border-brand-500 focus:outline-none rounded px-1 py-0.5 resize-none overflow-hidden transition-colors leading-snug ${className}`}
+      className={`w-full ${inputBase} resize-none overflow-hidden leading-snug ${className}`}
     />
   );
 }
@@ -97,7 +102,7 @@ function RemoveBtn({ onClick }: { onClick: () => void }) {
     <button
       onClick={onClick}
       title="Remove"
-      className="text-gray-300 dark:text-gray-600 hover:text-red-400 transition-colors text-xs leading-none flex-shrink-0 opacity-0 group-hover:opacity-100"
+      className="rounded p-1 text-gray-400 dark:text-gray-500 hover:text-red-500 transition-opacity text-xs leading-none flex-shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
     >
       ✕
     </button>
@@ -120,7 +125,7 @@ function BulletList({
   return (
     <div className="space-y-1 mt-1.5">
       {bullets.map((bullet, i) => (
-        <div key={i} className="group">
+        <div key={`${bullet.slice(0, 40)}-${i}`} className="group">
           <div className="flex items-start gap-1.5">
             <span className="text-gray-400 dark:text-gray-500 text-xs mt-1.5 flex-shrink-0 select-none">•</span>
             <InlineTextarea
@@ -136,7 +141,7 @@ function BulletList({
             <button
               onClick={() => onChange(bullets.filter((_, j) => j !== i))}
               title="Remove bullet"
-              className="text-gray-300 dark:text-gray-600 hover:text-red-400 transition-colors text-xs mt-1.5 flex-shrink-0 opacity-0 group-hover:opacity-100"
+              className="rounded p-1 text-gray-400 dark:text-gray-500 hover:text-red-500 transition-opacity text-xs mt-1 flex-shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             >
               ✕
             </button>
@@ -197,48 +202,48 @@ function BasicsEditor({
         />
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-lg bg-gray-50 px-3 py-2 dark:bg-[#1C1C1E]">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">Email</p>
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Email</p>
             <InlineInput
               value={content?.email || ""}
               onChange={(v) => updateField("email", v)}
               placeholder="email@example.com"
-              className="mt-1 w-full text-sm text-gray-700 dark:text-gray-300"
+              className="mt-1 w-full text-sm text-gray-900 dark:text-gray-100"
             />
           </div>
           <div className="rounded-lg bg-gray-50 px-3 py-2 dark:bg-[#1C1C1E]">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">Phone</p>
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Phone</p>
             <InlineInput
               value={content?.phone || ""}
               onChange={(v) => updateField("phone", v)}
               placeholder="(555) 555-5555"
-              className="mt-1 w-full text-sm text-gray-700 dark:text-gray-300"
+              className="mt-1 w-full text-sm text-gray-900 dark:text-gray-100"
             />
           </div>
           <div className="rounded-lg bg-gray-50 px-3 py-2 dark:bg-[#1C1C1E]">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">Location</p>
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Location</p>
             <InlineInput
               value={content?.location || ""}
               onChange={(v) => updateField("location", v)}
               placeholder="City, State"
-              className="mt-1 w-full text-sm text-gray-700 dark:text-gray-300"
+              className="mt-1 w-full text-sm text-gray-900 dark:text-gray-100"
             />
           </div>
           <div className="rounded-lg bg-gray-50 px-3 py-2 dark:bg-[#1C1C1E]">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">LinkedIn</p>
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">LinkedIn</p>
             <InlineInput
               value={content?.linkedin || ""}
               onChange={(v) => updateField("linkedin", v)}
               placeholder="linkedin.com/in/yourname"
-              className="mt-1 w-full text-sm text-gray-700 dark:text-gray-300"
+              className="mt-1 w-full text-sm text-gray-900 dark:text-gray-100"
             />
           </div>
           <div className="rounded-lg bg-gray-50 px-3 py-2 dark:bg-[#1C1C1E]">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">GitHub</p>
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">GitHub</p>
             <InlineInput
               value={content?.github || ""}
               onChange={(v) => updateField("github", v)}
               placeholder="github.com/yourname"
-              className="mt-1 w-full text-sm text-gray-700 dark:text-gray-300"
+              className="mt-1 w-full text-sm text-gray-900 dark:text-gray-100"
             />
             {notesForField("github").map((n, idx) => (
               <p key={idx} className="mt-2 text-xs text-amber-700 dark:text-amber-300">
@@ -247,12 +252,12 @@ function BasicsEditor({
             ))}
           </div>
           <div className="rounded-lg bg-gray-50 px-3 py-2 dark:bg-[#1C1C1E]">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">Portfolio</p>
+            <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Portfolio</p>
             <InlineInput
               value={content?.portfolio || ""}
               onChange={(v) => updateField("portfolio", v)}
               placeholder="yourportfolio.com"
-              className="mt-1 w-full text-sm text-gray-700 dark:text-gray-300"
+              className="mt-1 w-full text-sm text-gray-900 dark:text-gray-100"
             />
             {notesForField("portfolio").map((n, idx) => (
               <p key={idx} className="mt-2 text-xs text-amber-700 dark:text-amber-300">
@@ -291,7 +296,7 @@ function ExperienceEntry({
             value={entry.company || ""}
             onChange={(v) => upd("company", v)}
             placeholder="Company"
-            className="min-w-[14ch] font-semibold text-gray-900 dark:text-gray-100 text-sm"
+            className="w-full font-semibold text-gray-900 dark:text-gray-100 text-sm"
           />
           <div className="mt-0.5">
             <InlineInput
@@ -319,14 +324,16 @@ function ExperienceEntry({
               value={entry.startDate || ""}
               onChange={(v) => upd("startDate", v)}
               placeholder="Start"
-              className="min-w-[7ch] text-right text-sm text-gray-600 dark:text-gray-400"
+              fit
+              className="text-right text-sm text-gray-600 dark:text-gray-400"
             />
             <span className="text-gray-400 dark:text-gray-500">—</span>
             <InlineInput
               value={entry.endDate || ""}
               onChange={(v) => upd("endDate", v)}
               placeholder="Present"
-              className="min-w-[7ch] text-right text-sm text-gray-600 dark:text-gray-400"
+              fit
+              className="text-right text-sm text-gray-600 dark:text-gray-400"
             />
           </div>
           <RemoveBtn onClick={onRemove} />
@@ -398,7 +405,7 @@ function EducationEntry({
               value={entry.institution || ""}
               onChange={(v) => upd("institution", v)}
               placeholder="Institution"
-              className="min-w-[14ch] font-semibold text-gray-900 dark:text-gray-100 text-sm"
+              className="w-full font-semibold text-gray-900 dark:text-gray-100 text-sm"
             />
           </div>
           <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
@@ -423,6 +430,7 @@ function EducationEntry({
                   value={entry.gpa || ""}
                   onChange={(v) => upd("gpa", v)}
                   placeholder="e.g. 3.8"
+                  fit
                   className="text-gray-500 dark:text-gray-400 text-xs"
                 />
               </>
@@ -435,7 +443,8 @@ function EducationEntry({
             value={entry.endDate || ""}
             onChange={(v) => upd("endDate", v)}
             placeholder="Year"
-            className="text-gray-400 dark:text-gray-500 text-xs"
+            fit
+            className="text-right text-gray-400 dark:text-gray-500 text-xs"
           />
           <RemoveBtn onClick={onRemove} />
         </div>
@@ -500,14 +509,16 @@ function ProjectEntry({
               value={entry.startDate || ""}
               onChange={(v) => upd("startDate", v)}
               placeholder="Start"
-              className="text-gray-400 dark:text-gray-500 text-xs"
+              fit
+              className="text-right text-gray-400 dark:text-gray-500 text-xs"
             />
             <span className="text-gray-300 dark:text-gray-600 text-xs">–</span>
             <InlineInput
               value={entry.endDate || ""}
               onChange={(v) => upd("endDate", v)}
               placeholder="End / Present"
-              className="text-gray-400 dark:text-gray-500 text-xs"
+              fit
+              className="text-right text-gray-400 dark:text-gray-500 text-xs"
             />
           </div>
           <RemoveBtn onClick={onRemove} />
@@ -590,6 +601,7 @@ function SkillsEditor({ content, onChange }: { content: any[]; onChange: (c: any
                       onChange(next);
                     }}
                     placeholder="Skill"
+                    fit
                     className="text-xs text-gray-700 dark:text-gray-200"
                   />
                   <button
@@ -678,6 +690,7 @@ function CertificationsEditor({ content, onChange }: { content: any[]; onChange:
               onChange(next);
             }}
             placeholder="Year"
+            fit
             className="text-gray-400 dark:text-gray-500 text-xs"
           />
           <div className="flex-1" />
@@ -719,6 +732,7 @@ function AwardsEditor({ content, onChange }: { content: any[]; onChange: (c: any
                 onChange(next);
               }}
               placeholder="Year"
+              fit
               className="text-gray-400 dark:text-gray-500 text-xs"
             />
             <div className="flex-1" />
@@ -787,6 +801,7 @@ function PublicationsEditor({ content, onChange }: { content: any[]; onChange: (
                 onChange(next);
               }}
               placeholder="Year"
+              fit
               className="text-gray-400 dark:text-gray-500 text-xs"
             />
           </div>
@@ -833,7 +848,7 @@ function VolunteerEditor({ content, onChange }: { content: any[]; onChange: (c: 
                     onChange(next);
                   }}
                   placeholder="Organization"
-                  className="min-w-[14ch] font-semibold text-gray-900 dark:text-gray-100 text-sm"
+                  className="w-full font-semibold text-gray-900 dark:text-gray-100 text-sm"
                 />
               </div>
               <div className="mt-0.5">
@@ -860,7 +875,8 @@ function VolunteerEditor({ content, onChange }: { content: any[]; onChange: (c: 
                     onChange(next);
                   }}
                   placeholder="Start"
-                  className="text-gray-400 dark:text-gray-500 text-xs"
+                  fit
+                  className="text-right text-gray-400 dark:text-gray-500 text-xs"
                 />
                 <span className="text-gray-300 dark:text-gray-600 text-xs">–</span>
                 <InlineInput
@@ -871,7 +887,8 @@ function VolunteerEditor({ content, onChange }: { content: any[]; onChange: (c: 
                     onChange(next);
                   }}
                   placeholder="End / Present"
-                  className="text-gray-400 dark:text-gray-500 text-xs"
+                  fit
+                  className="text-right text-gray-400 dark:text-gray-500 text-xs"
                 />
               </div>
               <RemoveBtn onClick={() => onChange(content.filter((_, j) => j !== i))} />

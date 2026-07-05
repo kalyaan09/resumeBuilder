@@ -46,19 +46,19 @@ html.dark .app-canvas {
 
 /* Light: subtle glass, dialed back; left bar uses Tailwind in AppSidebar */
 html:not(.dark) [data-surface="panel"] {
-  background-color: rgba(255, 255, 255, 0.58) !important;
+  background-color: rgba(255, 255, 255, 0.85) !important;
   -webkit-backdrop-filter: blur(22px) saturate(1.1) !important;
   backdrop-filter: blur(22px) saturate(1.1) !important;
 }
 
 html:not(.dark) [data-surface="rail"] {
-  background-color: rgba(255, 255, 255, 0.52) !important;
+  background-color: rgba(255, 255, 255, 0.78) !important;
   -webkit-backdrop-filter: blur(18px) saturate(1.08) !important;
   backdrop-filter: blur(18px) saturate(1.08) !important;
 }
 
 html:not(.dark) [data-surface="inset"] {
-  background-color: rgba(255, 255, 255, 0.72) !important;
+  background-color: rgba(255, 255, 255, 0.92) !important;
   -webkit-backdrop-filter: blur(12px) saturate(1.06) !important;
   backdrop-filter: blur(12px) saturate(1.06) !important;
 }

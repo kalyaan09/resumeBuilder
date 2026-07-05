@@ -21,8 +21,17 @@ import { readErrorDetailFromResponse } from "../lib/httpError";
 import { autoFitOnExportEnabled } from "../lib/exportPrefs";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 
-const SIDECAR = "http://localhost:8000";
+const SIDECAR = "http://localhost:47372";
 const FONT_SIZES = [9, 9.5, 10, 10.5, 11];
+
+const TAILOR_STAGE_LABELS: Record<string, string> = {
+  manifest: "Step 1 of 4 — reading your resume…",
+  planner: "Step 2 of 4 — planning which bullets to rewrite…",
+  navigator: "Step 3 of 4 — rewriting bullets for this role…",
+  critic: "Step 4 of 4 — checking facts and consistency…",
+  fit: "Fitting your resume onto one page…",
+  fallback: "Retrying with a simpler approach…",
+};
 
 /**
  * Embedded PDF: Fit = scale page to the iframe viewport (less letterboxing than FitH in a tall panel).
@@ -68,11 +77,15 @@ export default function Editor({
   const [sharedData, setSharedData] = useState<Record<string, unknown> | null>(null);
   const [profileResume, setProfileResume] = useState<Record<string, unknown> | null>(null);
   const [masterSections, setMasterSections] = useState<Record<string, unknown> | null>(null);
-  const [editedSections, setEditedSections] = useState<Record<string, unknown> | null>(null);
+  // Derived synchronously — no state/effect needed, avoids blank flash on tab return
+  // (was useState+useEffect, which caused a render gap after remount)
 
   const [profileToast, setProfileToast] = useState<string | null>(null);
   const [jdAiLoading, setJdAiLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [tailorStage, setTailorStage] = useState<string | null>(null);
+  const [fitNotice, setFitNotice] = useState<string | null>(null);
+  const [jdCoverage, setJdCoverage] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
   const [lastExportPath, setLastExportPath] = useState<string | null>(null);
@@ -135,6 +148,11 @@ export default function Editor({
       // ignore
     }
   }, []);
+
+  const editedSections = useMemo(
+    () => (editedResume && config ? filterTailoredSectionsForEditor(editedResume, config) : null),
+    [editedResume, config],
+  );
 
   const previewWidthStyle = useMemo(() => {
     if (previewWidthPx == null) return undefined;
@@ -296,7 +314,9 @@ export default function Editor({
     if (isInitialBind) {
       didMountRef.current = true;
       // Never wipe draft on first bind — session restore handles returning from Settings/History.
-      void loadProfileData(activeProfileId, { resetTailoredDraft: false });
+      loadProfileData(activeProfileId, { resetTailoredDraft: false }).catch((e) =>
+        setError(e instanceof Error ? e.message : "Failed to load profile")
+      );
       return;
     }
 
@@ -305,13 +325,11 @@ export default function Editor({
     // The user's profile dropdown fires loadProfileData(next, resetTailoredDraft:true) directly
     // and is the intended way to switch profiles when a draft exists.
     const hasDraft = editedResumeRef.current != null;
-    void loadProfileData(activeProfileId, { resetTailoredDraft: !hasDraft });
+    loadProfileData(activeProfileId, { resetTailoredDraft: !hasDraft }).catch((e) =>
+      setError(e instanceof Error ? e.message : "Failed to load profile")
+    );
   }, [activeProfileId]);
 
-  useEffect(() => {
-    if (!editedResume || !config) return;
-    setEditedSections(filterTailoredSectionsForEditor(editedResume, config));
-  }, [editedResume, config]);
 
   useEffect(() => {
     if (!editedResume || !config) return;
@@ -356,7 +374,7 @@ export default function Editor({
         });
       } catch (err) {
         console.error("[preview-pdf]", err);
-        if (!cancelled) setOverflowWarning(null);
+        if (!cancelled) setOverflowWarning(err instanceof Error ? `Preview failed: ${err.message}` : "Preview failed");
       } finally {
         if (!cancelled) setPreviewLoading(false);
       }
@@ -379,9 +397,9 @@ export default function Editor({
     setSharedData(shared);
     setProfileResume(profile);
 
-    if (resetTailoredDraft) {
+    // Don't wipe the draft while a tailoring job is in flight — the poll will overwrite it on completion.
+    if (resetTailoredDraft && !loadingRef.current) {
       setEditedResume(null);
-      setEditedSections(null);
       setGaps(null);
       setTransformersContext({});
     }
@@ -398,8 +416,9 @@ export default function Editor({
   function handleClearDraft() {
     setJdText("");
     setEditedResume(null);
-    setEditedSections(null);
     setGaps(null);
+    setFitNotice(null);
+    setJdCoverage(null);
     setTransformersContext({});
     setError(null);
     setOverflowWarning(null);
@@ -461,16 +480,20 @@ export default function Editor({
         if (Date.now() > deadline) throw new Error("Tailoring timed out after 10 minutes");
         await new Promise((r) => setTimeout(r, POLL_INTERVAL));
         const pollRes = await fetch(`${SIDECAR}/edit-resume/poll/${job_id}`);
-        if (!pollRes.ok) throw new Error(await readErrorDetailFromResponse(pollRes));
+        if (!pollRes.ok) throw new Error(pollRes.status === 404 ? "Tailoring job expired — please try again" : await readErrorDetailFromResponse(pollRes));
         const job = await pollRes.json();
         if (job.status === "error") throw new Error(job.message ?? "Tailoring failed");
         if (job.status === "done") { data = job; break; }
+        setTailorStage(typeof job.stage === "string" ? job.stage : null);
       }
 
       // Bump so any in-flight loadProfileData cannot wipe this draft when it completes.
       loadProfileRequestRef.current += 1;
       const merged = { ...(freshShared ?? {}), ...(data.resume as Record<string, unknown>) };
       setEditedResume(merged);
+      setFitNotice(typeof data.fit_notice === "string" ? data.fit_notice : null);
+      setJdCoverage(typeof data.jd_coverage === "number" ? data.jd_coverage : null);
+      if (data.fallback) setError("Pipeline failed — used single-pass fallback. Quality may be lower.");
       if (data && typeof data === "object" && data.gaps) setGaps(data.gaps as EditorGaps);
       try {
         let granted = await isPermissionGranted();
@@ -484,6 +507,7 @@ export default function Editor({
       setError(e instanceof Error ? e.message : "Failed to edit resume");
     } finally {
       setLoading(false);
+      setTailorStage(null);
     }
   }
 
@@ -681,30 +705,37 @@ export default function Editor({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jdText, profiles]);
 
-  if (dataLoading) {
+  if (dataLoading && !editedResume) {
+    // Only block with a full-page spinner on first load; returning from Settings/History
+    // already has editedResume in memory so we can render immediately.
     return (
-      <div className="app-canvas flex min-h-screen items-center justify-center">
+      <div className="app-canvas flex min-h-screen items-center justify-center gap-3">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
+        <p className="text-sm text-gray-400 dark:text-gray-500">Loading…</p>
       </div>
     );
   }
 
-  // Require profile data; setupComplete alone can be false on disk while profiles/ still exists.
-  if (!profileResume) {
+  // Only show "no resume" after loading is definitively done — not mid-async on remount.
+  if (!dataLoading && !profileResume) {
     return (
       <div className="app-canvas flex min-h-screen flex-col">
         <div className="flex flex-1 items-center justify-center p-6">
           <Surface variant="solid" className="w-full max-w-md space-y-4 p-10 text-center">
-            <div className="text-4xl opacity-80">📄</div>
             <TypographyH2 className="border-0 pb-0 text-xl text-gray-900 dark:text-gray-100">
-              No master resume found
+              No resume found
             </TypographyH2>
             <TypographyMuted className="text-sm text-gray-500 dark:text-gray-400">
-              Finish setup to import your resume and start tailoring it to each role.
+              Your resume data could not be loaded. If you just set up the app, try restarting it. Otherwise, go through setup again.
             </TypographyMuted>
-            <Button type="button" onClick={() => navigate("/setup")} className="mt-2 w-full">
-              Go to setup
-            </Button>
+            <div className="flex gap-2">
+              <Button type="button" variant="secondary" onClick={() => window.location.reload()} className="mt-2 flex-1">
+                Reload
+              </Button>
+              <Button type="button" onClick={() => navigate("/setup")} className="mt-2 flex-1">
+                Go to setup
+              </Button>
+            </div>
           </Surface>
         </div>
       </div>
@@ -739,7 +770,7 @@ export default function Editor({
                               }
                             }
                           }}
-                          className="h-9 rounded-xl border border-gray-200/80 bg-white/70 px-3 pr-8 text-sm font-medium text-gray-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] backdrop-blur-sm focus:outline-none focus-visible:shadow-focus dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100"
+                          className="h-9 appearance-none rounded-xl border border-gray-200/80 bg-white/70 px-3 pr-8 text-sm font-medium text-gray-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] backdrop-blur-sm focus:outline-none focus-visible:shadow-focus dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100"
                         >
                           {profiles.map((p) => (
                             <option key={p.id} value={p.id}>
@@ -817,10 +848,11 @@ export default function Editor({
               {loading && (
                 <div className="flex flex-col items-center justify-center py-14">
                   <div className="h-10 w-10 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
-                  <TypographyMuted className="mt-4">Shaping your experience to fit this role…</TypographyMuted>
+                  <TypographyMuted className="mt-4">
+                    {TAILOR_STAGE_LABELS[tailorStage ?? ""] ?? "Shaping your experience to fit this role…"}
+                  </TypographyMuted>
                   <TypographyMuted className="mt-2 max-w-sm text-center text-xs leading-snug">
-                    Slower models can take several minutes and many API calls. Keep this window open and awake until it
-                    finishes—closing or sleeping can show “Load failed” even though the server is still working.
+                    This can take a few minutes with slower models. Keep the app open until it finishes.
                   </TypographyMuted>
                 </div>
               )}
@@ -868,7 +900,22 @@ export default function Editor({
 
               {editedSections && !loading && (
                 <div className="space-y-6">
-                  <h2 className="text-[15px] font-semibold tracking-tight text-gray-900 dark:text-gray-100">Edited resume</h2>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <h2 className="text-[15px] font-semibold tracking-tight text-gray-900 dark:text-gray-100">Edited resume</h2>
+                    {jdCoverage != null && (
+                      <span
+                        className="shrink-0 text-xs tabular-nums text-gray-500 dark:text-gray-400"
+                        title="Share of the job description's key terms that appear in the tailored resume"
+                      >
+                        JD keyword coverage: {Math.round(jdCoverage * 100)}%
+                      </span>
+                    )}
+                  </div>
+                  {fitNotice && (
+                    <div className="rounded-lg border border-emerald-200/90 bg-emerald-50 px-3 py-2 text-xs leading-snug text-emerald-950 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-50">
+                      {fitNotice}
+                    </div>
+                  )}
                   <ResumeEditor
                     sections={editedSections}
                     originalSections={masterSections}

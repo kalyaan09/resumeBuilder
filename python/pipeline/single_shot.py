@@ -21,6 +21,7 @@ Rules:
 - Rewrite the summary (3–4 sentences) for THIS role: open with a concrete fit to the JD, grounded in the experience bullets.
 - For each experience bullet: change wording vs the input when the work is relevant to the JD—not punctuation-only edits. Lead with a strong past-tense verb. Weave JD phrases and themes only where they truthfully describe the same work.
 - Reorder bullets within a role so JD-relevant bullets are first. Reorder skills within categories for JD fit (reorder only; do not add new skill strings).
+- LENGTH BUDGET: each bullet at most 210 characters (about two printed lines) — condense longer inputs, keep every number and proper noun.
 - No markdown, no code fences, no em dashes (—). Avoid: leverage, utilize, robust, seamless, transformative, synergy.
 
 Invisible or copy-paste output is a failure."""

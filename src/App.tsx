@@ -40,10 +40,20 @@ function App() {
       setProfiles(nextProfiles);
       setActiveProfileId(nextActive);
 
+      // Sync setupComplete with actual profile state from the backend.
+      // This overrides any stale setupComplete:true left in localStorage/config after a data wipe.
+      if (nextProfiles.length === 0) {
+        setSetupComplete(false);
+      }
+
       // If profiles exist, ensure setupComplete + a valid activeProfile are persisted.
-      // config.json can list an activeProfile id that no longer exists on disk; Python /profiles
-      // falls back to a real id — we must sync that to Tauri config or the Editor only reads stale config.
-      if (nextProfiles.length > 0 && nextActive) {
+      // nextActive can be null when config.json lacks activeProfile (old installs, partial resets) —
+      // fall back to first profile so we don't incorrectly route to Setup.
+      if (nextProfiles.length > 0) {
+        const resolvedActive = nextActive || nextProfiles[0]?.id || null;
+        if (resolvedActive && resolvedActive !== nextActive) {
+          setActiveProfileId(resolvedActive);
+        }
         setSetupComplete(true);
         void (async () => {
           const c = await readConfig().catch(() => null);
@@ -54,7 +64,7 @@ function App() {
             await writeConfig({
               ...(c || {}),
               setupComplete: true,
-              activeProfile: nextActive,
+              activeProfile: resolvedActive,
             }).catch(() => {});
           }
         })();
@@ -66,11 +76,11 @@ function App() {
     }
   }, []);
 
-  const checkBackendHealth = useCallback(async (retries = 40, delayMs = 1500) => {
+  const checkBackendHealth = useCallback(async (retries = 20, delayMs = 1500) => {
     setBackendConnecting(true);
     for (let i = 0; i < retries; i++) {
       try {
-        const res = await fetch("http://localhost:8000/health");
+        const res = await fetch("http://localhost:47372/health");
         if (res.ok) {
           setBackendReady(true);
           setBackendError(null);
@@ -136,12 +146,17 @@ function App() {
     };
   }, [profiles, activeProfileId, refreshProfiles]);
 
-  // Stay on spinner while config is loading (null), OR while config says incomplete but the
-  // backend is still connecting (including the first GET /profiles after /health).
+  // Stay on spinner while config is loading (null), OR while the backend is still
+  // connecting (including the first GET /profiles after /health).
+  // refreshProfiles() resets setupComplete to false if profiles are empty, so routing
+  // on setupComplete is authoritative once backendConnecting is false.
   if (setupComplete === null || backendConnecting) {
     return (
-      <div className="app-canvas flex min-h-screen items-center justify-center">
+      <div className="app-canvas flex min-h-screen flex-col items-center justify-center gap-3">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
+        <p className="text-sm text-gray-400 dark:text-gray-500">
+          {backendConnecting ? "Starting up… first launch can take ~10 seconds" : "Loading…"}
+        </p>
       </div>
     );
   }

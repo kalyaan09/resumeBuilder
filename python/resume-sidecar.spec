@@ -5,10 +5,10 @@
 #   - FastAPI/uvicorn server (main.py + all local modules)
 #   - Jinja2 HTML templates
 #   - Playwright Python package + its Node.js driver
-#   - Chromium browser from ~/Library/Caches/ms-playwright/
 #
-# The --onefile EXE extracts to ~/.resume-editor/_runtime/{hash}/ on first launch,
-# then reuses the cached extraction on subsequent launches (fast after first run).
+# --onedir mode: produces a directory (not a self-extracting binary).
+# No extraction step on first launch — startup is instant from any launch.
+# Output: python/dist/resume-sidecar/ (copied into src-tauri/resources/sidecar/ by build-dmg.sh)
 
 import os
 import sys
@@ -81,23 +81,31 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# --onedir: EXE contains only the bootloader + scripts; binaries/datas go in COLLECT.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="resume-sidecar",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,           # Do NOT compress — would corrupt the Chromium binary
-    upx_exclude=[],
-    runtime_tmpdir=str(Path.home() / ".resume-editor" / "_runtime"),
-    console=True,        # Keep console so log output goes to stderr (captured by Tauri)
+    upx=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="resume-sidecar",
 )

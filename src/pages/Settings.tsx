@@ -5,7 +5,7 @@ import { RoleCombobox } from "../components/RoleCombobox";
 import ResumeEditor from "../components/ResumeEditor";
 import SectionOrderEditor from "../components/SectionOrderEditor";
 import AppSidebar from "../components/AppSidebar";
-import { getApiKey, setApiKey } from "../lib/secureStore";
+import { getApiKey, setApiKey, clearAllApiKeys } from "../lib/secureStore";
 import { readConfig, writeConfig, readShared, readProfileResume, writeResume } from "../lib/persistenceStore";
 import { applyTheme, Theme } from "../lib/themeStore";
 import { Button, Modal, SegmentedControl, Surface, TypographyMuted } from "../ui";
@@ -17,7 +17,7 @@ import { CORE_SECTION_KEYS, SECTION_LABELS, computeSectionsWithData, getDefaultS
 import { readErrorDetailFromResponse } from "../lib/httpError";
 import { autoFitOnExportEnabled } from "../lib/exportPrefs";
 
-const SIDECAR = "http://localhost:8000";
+const SIDECAR = "http://localhost:47372";
 /** Bump when python/main.py PREVIEW_VERSION changes (busts WebView cache for embedded PDFs). */
 const PREVIEW_ASSET_VERSION = 8;
 
@@ -160,6 +160,7 @@ export default function Settings() {
   const [displaySections, setDisplaySections] = useState<Record<string, unknown> | null>(null);
   const [resumeDirty, setResumeDirty] = useState(false);
   const [resumeSaving, setResumeSaving] = useState(false);
+  const [resumeSaved, setResumeSaved] = useState(false);
 
   const [editedShared, setEditedShared] = useState<Record<string, unknown> | null>(null);
   const [editedProfile, setEditedProfile] = useState<Record<string, unknown> | null>(null);
@@ -347,16 +348,18 @@ export default function Settings() {
     try {
       if (activeProfileId && profiles.length > 0) {
         await Promise.all([
-          putShared(editedShared || {}).catch(() => {}),
-          putProfileResume(activeProfileId, editedProfile || {}).catch(() => {}),
+          putShared(editedShared || {}),
+          putProfileResume(activeProfileId, editedProfile || {}),
         ]);
       } else {
         await writeResume(editedResume);
       }
       setMasterResume(editedResume);
       setResumeDirty(false);
-    } catch {
-      // save failure is silent — user can retry via the Save button
+      setResumeSaved(true);
+      setTimeout(() => setResumeSaved(false), 2000);
+    } catch (e: unknown) {
+      setProfileError(e instanceof Error ? e.message : "Save failed — please try again");
     } finally {
       setResumeSaving(false);
     }
@@ -370,7 +373,7 @@ export default function Settings() {
 
   async function handleReset() {
     await resetAll();
-    // Clear all localStorage keys so stale data doesn't re-seed the wiped files
+    await clearAllApiKeys();
     Object.keys(localStorage)
       .filter(k => k.startsWith("re_"))
       .forEach(k => localStorage.removeItem(k));
@@ -453,13 +456,13 @@ export default function Settings() {
         await putProfileResume(activeProfileId, next);
         setEditedProfile(next);
       } else {
-        // All profiles
-        for (const p of profiles) {
+        // All profiles — run in parallel; any failure surfaces immediately
+        await Promise.all(profiles.map(async (p) => {
           const current = await getProfileResume(p.id);
           const next = { ...(current || {}) } as Record<string, unknown>;
           if (next[addSectionKey] === undefined) next[addSectionKey] = seedSectionValue(addSectionKey);
           await putProfileResume(p.id, next);
-        }
+        }));
         // Refresh the active profile's data in memory
         const refreshed = await getProfileResume(activeProfileId);
         setEditedProfile(refreshed || {});
@@ -505,8 +508,8 @@ export default function Settings() {
             <TypographyMuted className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
               Settings
             </TypographyMuted>
-            <div className="flex flex-col gap-0.5">
-              {SETTINGS_NAV.map((item) => (
+            <div className="flex flex-1 flex-col gap-0.5">
+              {SETTINGS_NAV.filter((item) => !item.danger).map((item) => (
                 <Button
                   key={item.id}
                   type="button"
@@ -522,6 +525,20 @@ export default function Settings() {
                   </span>
                 </Button>
               ))}
+              <div className="mt-auto">
+                <div className="mx-2 mb-2 h-px bg-gray-200/70 dark:bg-white/10" />
+                {SETTINGS_NAV.filter((item) => item.danger).map((item) => (
+                  <Button
+                    key={item.id}
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setActiveNav(item.id)}
+                    className={settingsNavItemClass(activeNav === item.id, item.danger)}
+                  >
+                    {item.label}
+                  </Button>
+                ))}
+              </div>
             </div>
           </Surface>
 
@@ -561,7 +578,7 @@ export default function Settings() {
                     title={!resumeDirty ? "Make a change to save" : undefined}
                   >
                     <Save data-icon="inline-start" />
-                    {resumeSaving ? "Saving…" : "Save"}
+                    {resumeSaved ? "Saved" : resumeSaving ? "Saving…" : "Save"}
                   </Button>
                 ) : null}
                 {activeNav !== "danger" && activeNav !== "resume" ? (

@@ -9,6 +9,15 @@ log = logging.getLogger("resume")
 
 NUMERIC = re.compile(r"\d+(?:\.\d+)?\s*(?:%|x|X|k|K|M|B|ms|s|QPS|qps)", re.IGNORECASE)
 
+_nlp = None
+
+def _get_nlp():
+    global _nlp
+    if _nlp is None:
+        import spacy
+        _nlp = spacy.load("en_core_web_sm")
+    return _nlp
+
 
 def extract_entity_manifest(resume_text, jd_text):
     """
@@ -25,8 +34,7 @@ def extract_entity_manifest(resume_text, jd_text):
             entities.append(token)
 
     try:
-        import spacy
-        nlp = spacy.load("en_core_web_sm")
+        nlp = _get_nlp()
         doc = nlp(combined[: min(len(combined), 500_000)])
         for ent in doc.ents:
             if ent.label_ in ("ORG", "PRODUCT", "GPE", "PERSON", "EVENT", "WORK_OF_ART", "FAC"):

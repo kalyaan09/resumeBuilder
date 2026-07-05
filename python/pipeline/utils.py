@@ -49,14 +49,17 @@ def robust_parse(raw: str):
 
     try:
         return json.loads(repair_json(text))
-    except Exception:
-        # Fallback to repair_json on the original if extraction failed
-        return json.loads(repair_json(raw))
+    except Exception as first_err:
+        try:
+            return json.loads(repair_json(raw))
+        except Exception as second_err:
+            raise ValueError(f"JSON repair failed. Extracted: {first_err}. Raw: {second_err}") from second_err
 
 
 # Only retries on non-rate-limit errors — llm_client already handles 429s internally.
+# TimeoutError covers llm_client.DeadlineExceeded: once the job budget is spent, don't retry.
 @retry(
-    retry=retry_if_exception(lambda e: not _is_rate_limit(e)),
+    retry=retry_if_exception(lambda e: not _is_rate_limit(e) and not isinstance(e, TimeoutError)),
     wait=wait_random_exponential(min=1, max=30),
     stop=stop_after_attempt(2),
 )

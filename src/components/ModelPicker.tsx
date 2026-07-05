@@ -39,16 +39,14 @@ const PROVIDERS: Array<{
       {
         key: "model",
         label: "Model",
-        placeholder: "gemini-3-flash",
+        placeholder: "gemini-3.5-flash",
         options: [
-          { value: "gemini-2.5-flash",            label: "gemini-2.5-flash",            note: "Recommended: fast, stable" },
-          { value: "gemini-3-flash-preview",       label: "gemini-3-flash-preview",       note: "Latest flash, fast general use" },
-          { value: "gemini-3.1-pro-preview",       label: "gemini-3.1-pro-preview",       note: "Best quality for complex reasoning and coding" },
-          { value: "gemini-3.1-flash-lite-preview",label: "gemini-3.1-flash-lite-preview",note: "Fastest, low latency and high volume" },
+          { value: "gemini-3.5-flash", label: "gemini-3.5-flash", note: "Recommended: fast general use" },
+          { value: "gemini-3.1-pro",   label: "gemini-3.1-pro",   note: "Best quality for complex reasoning" },
         ],
       },
     ],
-    defaultValues: { model: "gemini-2.5-flash" },
+    defaultValues: { model: "gemini-3.5-flash" },
   },
   {
     id: "anthropic",
@@ -132,7 +130,7 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
     setTestMessages((p) => ({ ...p, [provider]: "" }));
 
     try {
-      const res = await fetch("http://localhost:8000/test-connection", {
+      const res = await fetch("http://localhost:47372/test-connection", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // Merge api_key in for this call only; it never lives in value/localStorage
@@ -238,6 +236,13 @@ export default function ModelPicker({ value, apiKey, onChange, onApiKeyChange, o
                       )}
                     </Button>
                   ))}
+                  <input
+                    type="text"
+                    placeholder="or type a custom model id"
+                    value={(value as any)?.[field.key] || ""}
+                    onChange={(e) => handleFieldChange(field.key, e.target.value)}
+                    className="w-full rounded-xl border border-gray-200/80 bg-white/70 px-3 py-2 font-mono text-sm text-gray-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] backdrop-blur-sm focus:outline-none focus-visible:shadow-focus dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100"
+                  />
                 </div>
               ) : (
                 <input

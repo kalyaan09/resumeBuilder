@@ -1,6 +1,6 @@
 import { parseErrorDetailBody } from "./httpError";
 
-const SIDECAR = "http://localhost:8000";
+const SIDECAR = "http://localhost:47372";
 
 export type Profile = {
   id: string;

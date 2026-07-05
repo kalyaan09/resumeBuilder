@@ -97,8 +97,8 @@ export async function readConfig(): Promise<Record<string, unknown> | null> {
   if (!disk && !ls) return null;
   if (!disk) return ls;
   if (!ls) return disk;
-  // Disk wins for keys present in both; localStorage fills keys missing from disk (e.g. modelConfig).
-  return { ...ls, ...disk };
+  // localStorage wins: it's written first and holds the newest value when Tauri write fails.
+  return { ...disk, ...ls };
 }
 
 // ── Shared data (basics + education) ─────────────────────────────────────────

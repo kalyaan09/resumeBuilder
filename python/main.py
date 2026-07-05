@@ -399,9 +399,9 @@ def get_profiles():
 
     config = _load_config()
     active_id = config.get("activeProfile")
-    # Fall back to first profile if activeProfile is stale or missing
-    if active_id not in profile_ids and profile_ids:
-        active_id = profile_ids[0]
+    # Fall back to first profile if activeProfile is stale or missing; clear if no profiles
+    if active_id not in profile_ids:
+        active_id = profile_ids[0] if profile_ids else None
 
     return {
         "profiles": profiles,
@@ -516,7 +516,10 @@ def update_profile(profile_id: str, req: UpdateProfileRequest):
 @app.post("/reset")
 def reset_all():
     """Delete everything in ~/.resume-editor/ and start fresh."""
-    shutil.rmtree(DATA_DIR)
+    try:
+        shutil.rmtree(DATA_DIR)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Reset failed: {e}")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     log.info("[reset] wiped and recreated %s", DATA_DIR)
     return {"success": True}
@@ -909,7 +912,94 @@ def _evict_old_jobs() -> None:
             _jobs.pop(k, None)
 
 
+# Total wall-clock budget per tailoring job. Must stay under the frontend's
+# 10-minute poll timeout so the user sees a real error, not a dead spinner.
+_EDIT_JOB_DEADLINE_S = 8 * 60
+
+# Fit-to-one-page trim: drop at most this many bullets, never below this many per entry.
+_FIT_MAX_DROPS = 3
+_FIT_MIN_BULLETS_PER_ENTRY = 2
+
+
+def _fit_trim_candidates(resume: dict) -> list[dict]:
+    """
+    Deterministic trim sequence: progressively drop the last bullet of the
+    oldest (last-listed) experience entries, keeping at least
+    _FIT_MIN_BULLETS_PER_ENTRY bullets each. Returns [after_1_drop, after_2, ...].
+    """
+    # ponytail: recency heuristic, not planner relevance — the planner's bullet ids
+    # don't survive navigator reassembly; wire real ranking through if this misfires.
+    import copy as _copy
+
+    candidates: list[dict] = []
+    current = _copy.deepcopy(resume)
+    for _ in range(_FIT_MAX_DROPS):
+        exps = current.get("experience", [])
+        dropped = False
+        for exp in reversed(exps):
+            bullets = exp.get("bullets")
+            if isinstance(bullets, list) and len(bullets) > _FIT_MIN_BULLETS_PER_ENTRY:
+                exp["bullets"] = bullets[:-1]
+                dropped = True
+                break
+        if not dropped:
+            break
+        candidates.append(_copy.deepcopy(current))
+    return candidates
+
+
+def _fit_resume_to_page(validated: dict, req: "EditResumeRequest", config: dict) -> tuple[dict, str | None]:
+    """
+    Measure the tailored resume; if it slightly overflows one page, trim the
+    weakest bullets (oldest roles first) until it fits. Large overflows are
+    left alone — that resume is legitimately two pages.
+    Returns (possibly_trimmed_resume, user_notice_or_None). Never raises.
+    """
+    try:
+        from pdf_exporter import measure_content_heights, PAGE_CONTENT_HEIGHT_PX
+
+        template = config.get("template") or "jake"
+        font_size = float(config.get("defaultFontSize") or 10)
+        # Merge shared basics/education the same way the frontend does before preview.
+        merged = {**validated}
+        if isinstance(req.basics, dict):
+            merged.update({k: v for k, v in req.basics.items() if k in ("basics", "education")})
+
+        order = config.get("sectionOrder") or config.get("defaultSectionOrder") or list(merged.keys())
+        active = [k for k in order if merged.get(k)]
+
+        candidates = [merged] + [
+            {**c} for c in _fit_trim_candidates(merged)
+        ]
+        heights = measure_content_heights(candidates, template, order, active, font_size)
+
+        if heights[0] <= PAGE_CONTENT_HEIGHT_PX:
+            return validated, None  # already fits
+
+        for i in range(1, len(candidates)):
+            if heights[i] <= PAGE_CONTENT_HEIGHT_PX:
+                trimmed = candidates[i]
+                result = {**validated, "experience": trimmed.get("experience", validated.get("experience"))}
+                return result, (
+                    f"Removed {i} lower-priority bullet{'s' if i > 1 else ''} from older roles "
+                    "so the resume fits on one page. Add them back in the editor if you disagree."
+                )
+
+        return validated, None  # too big even after trimming — legitimately 2 pages
+    except Exception as e:
+        log.warning("[edit-resume] fit-to-page measurement failed (non-critical): %s", e)
+        return validated, None
+
+
 def _run_edit_job(job_id: str, req: "EditResumeRequest") -> None:
+    from llm_client import set_call_deadline
+
+    def set_stage(stage: str) -> None:
+        job = _jobs.get(job_id)
+        if job is not None and job.get("status") == "pending":
+            job["stage"] = stage
+
+    set_call_deadline(_EDIT_JOB_DEADLINE_S)
     try:
         config = _load_config()
         skill_allowlist = build_skill_allowlist(req.profile_resume)
@@ -918,7 +1008,7 @@ def _run_edit_job(job_id: str, req: "EditResumeRequest") -> None:
         )
 
         try:
-            validated, violations = run_pipeline(
+            validated, violations, pipeline_meta = run_pipeline(
                 profile_resume=req.profile_resume,
                 basics=req.basics,
                 jd_text=req.jd_text,
@@ -928,16 +1018,29 @@ def _run_edit_job(job_id: str, req: "EditResumeRequest") -> None:
                 config=config,
                 candidate_persona=candidate_persona,
                 skill_allowlist=skill_allowlist,
+                progress=set_stage,
             )
             log.info(
                 "[edit-resume] pipeline succeeded — keys=%s violations=%d experience_blocks=%d",
                 list(validated.keys()), len(violations), len(validated.get("experience", [])),
             )
             log.debug("[edit-resume] pipeline return snippet: %s", json.dumps(validated)[:600])
-            _jobs[job_id] = {"status": "done", "resume": validated, "pipeline_violations": violations}
+            set_stage("fit")
+            validated, fit_notice = _fit_resume_to_page(validated, req, config)
+            _jobs[job_id] = {
+                "status": "done",
+                "resume": validated,
+                "pipeline_violations": violations,
+                "fit_notice": fit_notice,
+                "jd_coverage": pipeline_meta.get("jd_coverage"),
+            }
 
         except Exception as pipeline_err:
+            # Budget spent — a fallback LLM call would fail the same way; surface the error.
+            if isinstance(pipeline_err, TimeoutError):
+                raise
             log.warning("[edit-resume] pipeline failed (%s) — falling back to single-LLM call", pipeline_err)
+            set_stage("fallback")
             dynamic_prompt = build_dynamic_prompt(
                 profile_resume=req.profile_resume,
                 basics=req.basics,
@@ -957,7 +1060,18 @@ def _run_edit_job(job_id: str, req: "EditResumeRequest") -> None:
             log.info("[edit-resume] fallback OK — keys=%s experience_blocks=%d",
                      list(validated.keys()), len(validated.get("experience", [])))
             log.debug("[edit-resume] fallback return snippet: %s", json.dumps(validated)[:600])
-            _jobs[job_id] = {"status": "done", "resume": validated, "pipeline_violations": []}
+            set_stage("fit")
+            validated, fit_notice = _fit_resume_to_page(validated, req, config)
+            from pipeline.controller import jd_coverage
+            coverage, _missing = jd_coverage(validated, req.transformers_context.get("must_include_keywords", []))
+            _jobs[job_id] = {
+                "status": "done",
+                "resume": validated,
+                "pipeline_violations": [],
+                "fallback": True,
+                "fit_notice": fit_notice,
+                "jd_coverage": coverage,
+            }
 
     except json.JSONDecodeError as e:
         log.error("[edit-resume] JSON parse failed: %s", e)
@@ -965,11 +1079,13 @@ def _run_edit_job(job_id: str, req: "EditResumeRequest") -> None:
     except Exception as e:
         log.exception("[edit-resume] error")
         _jobs[job_id] = {"status": "error", "message": str(e)}
+    finally:
+        set_call_deadline(None)
 
 
 @app.post("/edit-resume")
 def edit_resume(req: EditResumeRequest):
-    if not req.llm_config:
+    if not req.llm_config or not req.llm_config.get("provider"):
         raise HTTPException(status_code=400, detail="No model configured")
     _evict_old_jobs()
     job_id = str(uuid.uuid4())
@@ -982,7 +1098,7 @@ def edit_resume(req: EditResumeRequest):
 def poll_edit_job(job_id: str):
     job = _jobs.get(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Job not found or expired — please re-submit")
     return job
 
 
@@ -1482,4 +1598,4 @@ def template_preview_pdf(template_name: str):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=47372, log_level="info")

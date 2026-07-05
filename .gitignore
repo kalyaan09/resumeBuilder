@@ -33,6 +33,8 @@ UI SS/
 env/
 python/env/
 src-tauri/binaries/
+src-tauri/resources/sidecar/*
+!src-tauri/resources/sidecar/.gitkeep
 src-tauri/target/
 python/__pycache__/
 

@@ -9,6 +9,15 @@ import logging
 
 log = logging.getLogger("resume")
 
+_nlp = None
+
+def _get_nlp():
+    global _nlp
+    if _nlp is None:
+        import spacy
+        _nlp = spacy.load("en_core_web_sm")
+    return _nlp
+
 BANNED_PATTERNS = [
     r"\bleverag\w*", r"\bdelv\w+", r"\brobust\b", r"\bseamless\w*",
     r"\butili[sz]\w*", r"\bharness\w*", r"\bfoster\w*", r"\bstreamlin\w*",
@@ -190,8 +199,7 @@ def run_deterministic_checks(
 
     if allowed:
         try:
-            import spacy
-            nlp = spacy.load("en_core_web_sm")
+            nlp = _get_nlp()
             all_output_text = " ".join(b["text"] for b in rewritten_bullets) + " " + summary
             output_doc = nlp(all_output_text)
             output_entities = {

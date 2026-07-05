@@ -39,6 +39,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/resume-sidecar"]
+    "resources": ["resources/sidecar/**/*"]
   }
 }

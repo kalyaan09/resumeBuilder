@@ -77,11 +77,11 @@ const CLASSIFIER_MODEL = "Xenova/distilbert-base-uncased-mnli";
 const CLASSIFIER_LOAD_TIMEOUT_MS = 30_000;
 
 let classifierPromise: Promise<any | null> | null = null;
-/** After timeout or load error, skip Transformers for the rest of the session (keyword fallback only). */
-let classifierAutoDetectionDisabled = false;
+let classifierFailCount = 0;
 
 async function getClassifier(): Promise<any | null> {
-  if (classifierAutoDetectionDisabled) return null;
+  // After 3 consecutive failures, stop retrying for the session
+  if (classifierFailCount >= 3) return null;
   if (!classifierPromise) {
     const loadPipeline = async () => {
       try {
@@ -100,7 +100,7 @@ async function getClassifier(): Promise<any | null> {
     classifierPromise = Promise.race([loadPipeline(), timeout])
       .then((model) => model)
       .catch((err: unknown) => {
-        classifierAutoDetectionDisabled = true;
+        classifierFailCount += 1;
         classifierPromise = null;
         const msg = err instanceof Error ? err.message : String(err);
         if (msg !== "CLASSIFIER_TIMEOUT") {

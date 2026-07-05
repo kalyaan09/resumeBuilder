@@ -250,6 +250,39 @@ def export_to_pdf(
     return str(output_path), chosen_size, overflow_warning
 
 
+def measure_content_heights(
+    resumes: list[dict],
+    template_name: str,
+    section_order: list[str],
+    active_sections: list[str],
+    font_size: float = 10.0,
+) -> list[float]:
+    """
+    Measure rendered content height (px at 96dpi) for several resume variants
+    in one browser session. Fits one page when height <= PAGE_CONTENT_HEIGHT_PX.
+    Same 739px-viewport heuristic as export auto-fit.
+    """
+    from playwright.sync_api import sync_playwright
+
+    heights: list[float] = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(channel="chrome")
+        try:
+            page = browser.new_page(viewport={"width": 739, "height": 1056})
+            for resume in resumes:
+                html = _render_html(resume, template_name, section_order, active_sections, font_size)
+                page.set_content(html, wait_until="domcontentloaded")
+                rect = page.evaluate("document.body.getBoundingClientRect().height")
+                heights.append(float(rect))
+        finally:
+            browser.close()
+    return heights
+
+
+# Exported for callers of measure_content_heights.
+PAGE_CONTENT_HEIGHT_PX = _PAGE_CONTENT_HEIGHT_PX
+
+
 def render_pdf_to_path(
     resume: dict,
     template_name: str,

@@ -15,7 +15,7 @@ export default function History() {
   const [items, setItems] = useState<ExportHistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const profileLabel = useMemo(() => {
     const m = new Map(profiles.map((p) => [p.id, p.name]));
@@ -81,9 +81,14 @@ export default function History() {
 
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             {!backendReady && !backendConnecting ? (
-              <TypographyMuted className="text-sm">
-                Connect to the preview service to load history from your machine.
-              </TypographyMuted>
+              <div className="flex flex-col items-start gap-3">
+                <TypographyMuted className="text-sm">
+                  Connect to the preview service to load history from your machine.
+                </TypographyMuted>
+                <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+                  Retry
+                </Button>
+              </div>
             ) : backendConnecting ? (
               <div className="flex items-center gap-3 py-8">
                 <div className="h-8 w-8 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
@@ -101,14 +106,15 @@ export default function History() {
             ) : items.length === 0 ? (
               <Surface variant="inset" className="rounded-xl p-8 text-center">
                 <TypographyMuted className="text-sm leading-relaxed">
-                  No exports yet. Open the Editor, tailor your resume, then export a PDF (Save). Each export appends a row to{" "}
-                  <code className="rounded bg-black/[0.06] px-1.5 py-0.5 font-mono text-xs dark:bg-white/10">~/.resume-editor/history.json</code>.
+                  No exports yet. Open the Editor, tailor your resume, and save a PDF — each export will show up here.
                 </TypographyMuted>
               </Surface>
             ) : (
               <ul className="space-y-3">
-                {items.map((row, i) => (
-                  <li key={`${row.date}-${row.company}-${row.profile_used}-${items.length - i}`}>
+                {items.map((row, i) => {
+                  const rowKey = `${row.date}-${row.company}-${row.profile_used}-${i}`;
+                  return (
+                  <li key={rowKey}>
                     <Surface variant="inset" className="rounded-xl p-4">
                       <div className="flex flex-wrap items-start justify-between gap-2 gap-y-2">
                         <div className="min-w-0">
@@ -122,6 +128,9 @@ export default function History() {
                           <span className="rounded-full bg-black/[0.06] px-2.5 py-1 dark:bg-white/10">
                             {profileLabel(row.profile_used)}
                           </span>
+                          {row.match_score != null && (
+                            <span className="tabular-nums">{Math.round(row.match_score * 100)}% match</span>
+                          )}
                           <span className="tabular-nums">{row.font_size} pt</span>
                           <span>{row.pages} pg</span>
                         </div>
@@ -146,18 +155,19 @@ export default function History() {
                       <button
                         type="button"
                         className="mt-2 text-left text-xs font-medium text-brand-700 underline-offset-2 hover:underline dark:text-brand-400"
-                        onClick={() => setExpanded((prev) => ({ ...prev, [i]: !prev[i] }))}
+                        onClick={() => setExpanded((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }))}
                       >
-                        {expanded[i] ? "Hide JD snippet" : "Show JD snippet"}
+                        {expanded[rowKey] ? "Hide JD snippet" : "Show JD snippet"}
                       </button>
-                      {expanded[i] && row.jd_snippet ? (
+                      {expanded[rowKey] && row.jd_snippet ? (
                         <p className="mt-2 whitespace-pre-wrap rounded-lg bg-black/[0.04] p-3 text-xs leading-relaxed text-gray-700 dark:bg-white/[0.06] dark:text-gray-200">
                           {row.jd_snippet}
                         </p>
                       ) : null}
                     </Surface>
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             )}
           </div>
